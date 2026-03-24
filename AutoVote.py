@@ -50,8 +50,8 @@ base_path = "./screenshots/"
 shareholderIDs = []
 
 # 新增：速率分離與視窗記憶
-vote_speed = 1.5  
-shot_speed = 1.0
+vote_speed = 2.0  
+shot_speed = 0.5
 main_window_geom = ""
 disc_window_geom = ""
 
@@ -68,6 +68,7 @@ join_draw = False # <--- 新增：是否參加抽獎的預設值
 session_results = {}
 user_name_map = {}
 execution_logs = []
+ignore_update_until = 0.0 # <--- 新增：紀錄暫停自動檢查更新的時間戳記
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--log-level=3"
 
@@ -132,9 +133,14 @@ CONFIG_DIR = get_app_data_path()
 
 import urllib.parse # 確保最上方有這個模組，或是直接讓它在函式裡被呼叫也可以
 
-def check_for_updates():
+def check_for_updates(auto=False):
+    global ignore_update_until
+    
+    # 如果是系統自動檢查，且目前時間還在「7天免打擾」期間內，則直接略過
+    if auto and time.time() < ignore_update_until:
+        return
+
     try:
-        # 加上時間戳記 (?t=數值)，強制繞過 GitHub 的快取，抓取絕對最新的 json
         timestamp = int(time.time())
         url_with_timestamp = f"{VERSION_INFO_URL}?t={timestamp}"
         
@@ -148,22 +154,62 @@ def check_for_updates():
             return [int(x) for x in v.split('.')]
 
         if parse_version(remote_version) > parse_version(CURRENT_VERSION):
+            # --- 建立自定義的更新通知視窗 ---
+            update_win = tk.Toplevel()
+            update_win.title("軟體更新通知")
+            update_win.geometry("400x380")
+            update_win.attributes('-topmost', True) # 視窗置頂
+            
+            # 讓視窗置中
+            update_win.update_idletasks()
+            w = update_win.winfo_width()
+            h = update_win.winfo_height()
+            x = (update_win.winfo_screenwidth() // 2) - (w // 2)
+            y = (update_win.winfo_screenheight() // 2) - (h // 2)
+            update_win.geometry(f'{w}x{h}+{x}+{y}')
+            
             msg = (
                 f"🎉 發現新版本！\n\n"
                 f"目前版本: v{CURRENT_VERSION}\n"
                 f"最新版本: v{remote_version}\n\n"
                 f"【本次更新內容】\n"
-                f"{update_notes}\n\n"
-                f"是否要立即下載並更新？"
+                f"{update_notes}\n"
             )
             
-            if messagebox.askyesno("軟體更新通知", msg):
+            tk.Label(update_win, text=msg, font=("Microsoft JhengHei", 10), justify="left", wraplength=350).pack(padx=20, pady=(15, 5), fill="both", expand=True)
+            
+            ignore_var = tk.BooleanVar(value=False)
+            
+            # 只有自動檢查觸發時，才顯示「7天內不再檢查」的勾選框
+            if auto:
+                ttk.Checkbutton(update_win, text="7天內不再自動檢查更新", variable=ignore_var).pack(pady=5)
+            
+            btn_frame = ttk.Frame(update_win)
+            btn_frame.pack(pady=15)
+            
+            def on_yes():
+                update_win.destroy()
                 perform_update(download_url)
+                
+            def on_no():
+                if auto and ignore_var.get():
+                    global ignore_update_until
+                    # 紀錄 7 天後的時間戳記 (7天 * 24小時 * 60分 * 60秒)
+                    ignore_update_until = time.time() + 7 * 24 * 60 * 60
+                    try: app.save_config() # 呼叫主程式存檔
+                    except: pass
+                update_win.destroy()
+                
+            ttk.Button(btn_frame, text="立即下載更新", command=on_yes, style='Action.TButton').pack(side="left", padx=10, ipadx=10)
+            ttk.Button(btn_frame, text="稍後再說", command=on_no).pack(side="left", padx=10, ipadx=10)
+            
         else:
-            messagebox.showinfo("檢查更新", f"目前已是最新版本 (v{CURRENT_VERSION})")
+            # 只有手動點擊檢查時，才跳出「已是最新版本」的提示
+            if not auto:
+                messagebox.showinfo("檢查更新", f"目前已是最新版本 (v{CURRENT_VERSION})")
     except Exception as e:
-        messagebox.showerror("更新失敗", f"無法檢查更新，請確認網路連線。\n({e})")
-
+        if not auto:
+            messagebox.showerror("更新失敗", f"無法檢查更新，請確認網路連線。\n({e})")
 def perform_update(download_url):
     try:
         current_exe_path = os.path.abspath(sys.executable)
@@ -1477,7 +1523,7 @@ class App(tk.Tk):
         log_msg("小提示: 第一次使用請先到 [設定] 頁面輸入帳號喔！")
         
         self.after(200, self.show_disclaimer)
-        self.after(300, check_for_updates)
+        self.after(100, lambda: check_for_updates(auto=True))
         
     def on_closing(self):
         global main_window_geom
@@ -1567,7 +1613,7 @@ class App(tk.Tk):
             close_btn.pack(pady=(0, 5), ipadx=20)
 
     def load_config(self):
-        global shareholderIDs, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw
+        global shareholderIDs, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until
         conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
         vote_conf_path = os.path.join(CONFIG_DIR, 'vote_setting.conf')
         if os.path.exists(conf_path):
@@ -1585,12 +1631,14 @@ class App(tk.Tk):
                         if "disclaimer_agreed:::" in line: disclaimer_agreed = (line.split(":::")[1].strip() == 'True') 
                         if "main_window_geom:::" in line: main_window_geom = line.split(":::")[1].strip()
                         if "disc_window_geom:::" in line: disc_window_geom = line.split(":::")[1].strip()
-                        if "join_draw:::" in line: join_draw = (line.split(":::")[1].strip() == 'True') # <--- 新增讀取
+                        if "join_draw:::" in line: join_draw = (line.split(":::")[1].strip() == 'True')
+                        if "ignore_update_until:::" in line: ignore_update_until = float(line.split(":::")[1]) # 新增讀取
                         if "shareholderIDs:::" in line: 
                             encrypted_ids = line.split(":::")[1]
                             decrypted_ids = decrypt_data(encrypted_ids)
                             if decrypted_ids: shareholderIDs = decrypted_ids.split("|/|")
             except: pass
+            
         if os.path.exists(vote_conf_path):
             try:
                 with open(vote_conf_path, 'r', encoding='utf8') as f:
@@ -1603,16 +1651,17 @@ class App(tk.Tk):
                         if "abstain:::" in line: abstain_list = [k for k in line.split(":::")[1].split("|/|") if k]
             except: pass
 
+        # ====== 下方這些是上次漏掉的 UI 變數綁定 ======
         self.vote_speed_var = tk.StringVar(value=str(vote_speed))
         self.shot_speed_var = tk.StringVar(value=str(shot_speed))
         self.screenshot_mode_var = tk.IntVar(value=screenshot_mode)
-        self.join_draw_var = tk.BooleanVar(value=join_draw) # <--- 新增 UI 變數綁定
+        self.join_draw_var = tk.BooleanVar(value=join_draw) 
         ids_str = ",".join(shareholderIDs) if shareholderIDs else ""
         self.ids_var = tk.StringVar(value=ids_str)
         self.revoke_mode_var = tk.StringVar(value="specific")
 
     def save_config(self):
-        global vote_speed, shot_speed, screenshot_mode, shareholderIDs, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw
+        global vote_speed, shot_speed, screenshot_mode, shareholderIDs, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until
         try:
             try: 
                 v_val = float(self.vote_speed_var.get()); vote_speed = v_val 
@@ -1622,7 +1671,7 @@ class App(tk.Tk):
                 return
             screenshot_mode = self.screenshot_mode_var.get()
             login_type = self.login_type_cb.get()
-            join_draw = self.join_draw_var.get() # <--- 取得 UI 上的勾選狀態
+            join_draw = self.join_draw_var.get() 
             shareholderIDs = [x.strip() for x in self.ids_var.get().split(',') if x.strip()]
             conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
             with open(conf_path, 'w', encoding='utf8') as f:
@@ -1633,7 +1682,8 @@ class App(tk.Tk):
                 f.write(f"disclaimer_agreed:::{disclaimer_agreed}\n") 
                 f.write(f"main_window_geom:::{main_window_geom}\n")
                 f.write(f"disc_window_geom:::{disc_window_geom}\n")
-                f.write(f"join_draw:::{join_draw}\n") # <--- 寫入設定
+                f.write(f"join_draw:::{join_draw}\n")
+                f.write(f"ignore_update_until:::{ignore_update_until}\n") # <--- 新增儲存
                 encrypted_str = encrypt_data('|/|'.join(shareholderIDs))
                 f.write(f"shareholderIDs:::{encrypted_str}\n")
                 f.write("hash:::SECURE_ENCRYPTED_V4\n")
@@ -1817,7 +1867,7 @@ class App(tk.Tk):
         ttk.Label(id_frame, text="我的帳號清單 (多個請用逗號分隔):").pack(anchor="w")
         ttk.Entry(id_frame, textvariable=self.ids_var).pack(fill="x", pady=1)
         ttk.Button(frame_setting, text="儲存設定 (加密)", style='Red.TButton', command=self.save_config, cursor="hand2").pack(pady=2, ipady=1, fill='x')
-        ttk.Button(frame_setting, text="檢查程式更新", style='Normal.TButton', command=check_for_updates).pack(pady=5, ipady=1, fill='x')
+        ttk.Button(frame_setting, text="檢查程式更新", style='Normal.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=5, ipady=1, fill='x')
 
         # ==========================================
         # === Tab 4: 系統資訊 (路徑與免責聲明) ===
