@@ -1391,7 +1391,7 @@ def generate_session_report(start_t=None, end_t=None, count=0):
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
-        file_name = f"自動化任務報告_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+        file_name = f"自動化任務報告_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         report_name = os.path.join(log_dir, file_name)
         
         def chunks(lst, n):
@@ -1405,7 +1405,7 @@ def generate_session_report(start_t=None, end_t=None, count=0):
             # --- 新增：速率與環境紀錄 ---
             f.write(f"【執行環境設定】\n")
             f.write(f"  - 登入方式: {login_type}\n")
-            f.write(f"  - 投票操作速率: {vote_speed} (越小越快)\n")
+            f.write(f"  - 投票操作速率: {vote_speed}\n")
             f.write(f"  - 截圖等待速率: {shot_speed}\n")
             # --------------------------
 
@@ -1687,7 +1687,7 @@ class App(tk.Tk):
                 encrypted_str = encrypt_data('|/|'.join(shareholderIDs))
                 f.write(f"shareholderIDs:::{encrypted_str}\n")
                 f.write("hash:::SECURE_ENCRYPTED_V4\n")
-            log_msg("設定已安全儲存 (PBKDF2 加密保護中)。")
+            log_msg("設定已儲存。")
         except Exception as e: log_msg(f"儲存設定失敗: {e}")
 
     # 速率微調輔助函數
