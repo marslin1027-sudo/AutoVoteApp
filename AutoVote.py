@@ -172,17 +172,11 @@ def _show_update_window(remote_version, download_url, update_notes, auto):
     # --- 建立自定義的更新通知視窗 ---
     update_win = tk.Toplevel()
     update_win.title("軟體更新通知")
-    update_win.geometry("400x380")
     update_win.attributes('-topmost', True) # 視窗置頂
     
-    # 讓視窗置中
-    update_win.update_idletasks()
-    w = update_win.winfo_width()
-    h = update_win.winfo_height()
-    x = (update_win.winfo_screenwidth() // 2) - (w // 2)
-    y = (update_win.winfo_screenheight() // 2) - (h // 2)
-    update_win.geometry(f'{w}x{h}+{x}+{y}')
-    
+    # 設定一個最小寬高，避免內容太少時視窗縮得太小
+    update_win.minsize(400, 200)
+
     msg = (
         f"🎉 發現新版本！\n\n"
         f"目前版本: v{CURRENT_VERSION}\n"
@@ -191,16 +185,22 @@ def _show_update_window(remote_version, download_url, update_notes, auto):
         f"{update_notes}\n"
     )
     
-    tk.Label(update_win, text=msg, font=("Microsoft JhengHei", 10), justify="left", wraplength=350).pack(padx=20, pady=(15, 5), fill="both", expand=True)
+    # 用一個 Frame 把所有東西包起來，方便控制邊距
+    content_frame = ttk.Frame(update_win, padding=20)
+    content_frame.pack(fill="both", expand=True)
+    
+    # Label 會根據內容的多寡自動把高度撐開，wraplength 控制寬度到多少時自動換行
+    msg_label = tk.Label(content_frame, text=msg, font=("Microsoft JhengHei", 10), justify="left", wraplength=360)
+    msg_label.pack(fill="both", expand=True)
     
     ignore_var = tk.BooleanVar(value=False)
     
     # 只有自動檢查觸發時，才顯示「7天內不再檢查」的勾選框
     if auto:
-        ttk.Checkbutton(update_win, text="7天內不再自動檢查更新", variable=ignore_var).pack(pady=5)
+        ttk.Checkbutton(content_frame, text="7天內不再自動檢查更新", variable=ignore_var).pack(pady=(10, 0))
     
-    btn_frame = ttk.Frame(update_win)
-    btn_frame.pack(pady=15)
+    btn_frame = ttk.Frame(content_frame)
+    btn_frame.pack(pady=(20, 0))
     
     def on_yes():
         update_win.destroy()
@@ -218,6 +218,22 @@ def _show_update_window(remote_version, download_url, update_notes, auto):
     ttk.Button(btn_frame, text="立即下載更新", command=on_yes, style='Action.TButton').pack(side="left", padx=10, ipadx=10)
     ttk.Button(btn_frame, text="稍後再說", command=on_no).pack(side="left", padx=10, ipadx=10)
 
+    # ==========================================
+    # 🌟 動態計算視窗大小與置中魔法
+    # ==========================================
+    # 先讓系統在背景排版，計算出各元件實際需要的長寬
+    update_win.update_idletasks()
+    
+    # 取得自動撐開後的實際寬度與高度
+    req_w = update_win.winfo_reqwidth()
+    req_h = update_win.winfo_reqheight()
+    
+    # 計算置中座標
+    x = (update_win.winfo_screenwidth() // 2) - (req_w // 2)
+    y = (update_win.winfo_screenheight() // 2) - (req_h // 2)
+    
+    # 套用動態計算出的大小與置中位置
+    update_win.geometry(f'{req_w}x{req_h}+{x}+{y}')
 
             
 def perform_update(download_url):
