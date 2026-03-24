@@ -134,6 +134,10 @@ CONFIG_DIR = get_app_data_path()
 import urllib.parse # 確保最上方有這個模組，或是直接讓它在函式裡被呼叫也可以
 
 def check_for_updates(auto=False):
+    # 啟動背景執行緒來檢查網路，避免卡死主視窗 UI
+    threading.Thread(target=_check_for_updates_thread, args=(auto,), daemon=True).start()
+
+def _check_for_updates_thread(auto):
     global ignore_update_until
     
     # 如果是系統自動檢查，且目前時間還在「7天免打擾」期間內，則直接略過
@@ -154,62 +158,68 @@ def check_for_updates(auto=False):
             return [int(x) for x in v.split('.')]
 
         if parse_version(remote_version) > parse_version(CURRENT_VERSION):
-            # --- 建立自定義的更新通知視窗 ---
-            update_win = tk.Toplevel()
-            update_win.title("軟體更新通知")
-            update_win.geometry("400x380")
-            update_win.attributes('-topmost', True) # 視窗置頂
-            
-            # 讓視窗置中
-            update_win.update_idletasks()
-            w = update_win.winfo_width()
-            h = update_win.winfo_height()
-            x = (update_win.winfo_screenwidth() // 2) - (w // 2)
-            y = (update_win.winfo_screenheight() // 2) - (h // 2)
-            update_win.geometry(f'{w}x{h}+{x}+{y}')
-            
-            msg = (
-                f"🎉 發現新版本！\n\n"
-                f"目前版本: v{CURRENT_VERSION}\n"
-                f"最新版本: v{remote_version}\n\n"
-                f"【本次更新內容】\n"
-                f"{update_notes}\n"
-            )
-            
-            tk.Label(update_win, text=msg, font=("Microsoft JhengHei", 10), justify="left", wraplength=350).pack(padx=20, pady=(15, 5), fill="both", expand=True)
-            
-            ignore_var = tk.BooleanVar(value=False)
-            
-            # 只有自動檢查觸發時，才顯示「7天內不再檢查」的勾選框
-            if auto:
-                ttk.Checkbutton(update_win, text="7天內不再自動檢查更新", variable=ignore_var).pack(pady=5)
-            
-            btn_frame = ttk.Frame(update_win)
-            btn_frame.pack(pady=15)
-            
-            def on_yes():
-                update_win.destroy()
-                perform_update(download_url)
-                
-            def on_no():
-                if auto and ignore_var.get():
-                    global ignore_update_until
-                    # 紀錄 7 天後的時間戳記 (7天 * 24小時 * 60分 * 60秒)
-                    ignore_update_until = time.time() + 7 * 24 * 60 * 60
-                    try: app.save_config() # 呼叫主程式存檔
-                    except: pass
-                update_win.destroy()
-                
-            ttk.Button(btn_frame, text="立即下載更新", command=on_yes, style='Action.TButton').pack(side="left", padx=10, ipadx=10)
-            ttk.Button(btn_frame, text="稍後再說", command=on_no).pack(side="left", padx=10, ipadx=10)
-            
+            # 必須回到主執行緒 (Main Thread) 才能建立 Tkinter 視窗！
+            app.after(0, lambda: _show_update_window(remote_version, download_url, update_notes, auto))
         else:
             # 只有手動點擊檢查時，才跳出「已是最新版本」的提示
             if not auto:
-                messagebox.showinfo("檢查更新", f"目前已是最新版本 (v{CURRENT_VERSION})")
+                app.after(0, lambda: messagebox.showinfo("檢查更新", f"目前已是最新版本 (v{CURRENT_VERSION})"))
     except Exception as e:
         if not auto:
-            messagebox.showerror("更新失敗", f"無法檢查更新，請確認網路連線。\n({e})")
+            app.after(0, lambda: messagebox.showerror("更新失敗", f"無法檢查更新，請確認網路連線。\n({e})"))
+
+def _show_update_window(remote_version, download_url, update_notes, auto):
+    # --- 建立自定義的更新通知視窗 ---
+    update_win = tk.Toplevel()
+    update_win.title("軟體更新通知")
+    update_win.geometry("400x380")
+    update_win.attributes('-topmost', True) # 視窗置頂
+    
+    # 讓視窗置中
+    update_win.update_idletasks()
+    w = update_win.winfo_width()
+    h = update_win.winfo_height()
+    x = (update_win.winfo_screenwidth() // 2) - (w // 2)
+    y = (update_win.winfo_screenheight() // 2) - (h // 2)
+    update_win.geometry(f'{w}x{h}+{x}+{y}')
+    
+    msg = (
+        f"🎉 發現新版本！\n\n"
+        f"目前版本: v{CURRENT_VERSION}\n"
+        f"最新版本: v{remote_version}\n\n"
+        f"【本次更新內容】\n"
+        f"{update_notes}\n"
+    )
+    
+    tk.Label(update_win, text=msg, font=("Microsoft JhengHei", 10), justify="left", wraplength=350).pack(padx=20, pady=(15, 5), fill="both", expand=True)
+    
+    ignore_var = tk.BooleanVar(value=False)
+    
+    # 只有自動檢查觸發時，才顯示「7天內不再檢查」的勾選框
+    if auto:
+        ttk.Checkbutton(update_win, text="7天內不再自動檢查更新", variable=ignore_var).pack(pady=5)
+    
+    btn_frame = ttk.Frame(update_win)
+    btn_frame.pack(pady=15)
+    
+    def on_yes():
+        update_win.destroy()
+        perform_update(download_url)
+        
+    def on_no():
+        if auto and ignore_var.get():
+            global ignore_update_until
+            # 紀錄 7 天後的時間戳記
+            ignore_update_until = time.time() + 7 * 24 * 60 * 60
+            try: app.save_config() # 呼叫主程式存檔
+            except: pass
+        update_win.destroy()
+        
+    ttk.Button(btn_frame, text="立即下載更新", command=on_yes, style='Action.TButton').pack(side="left", padx=10, ipadx=10)
+    ttk.Button(btn_frame, text="稍後再說", command=on_no).pack(side="left", padx=10, ipadx=10)
+
+
+            
 def perform_update(download_url):
     try:
         current_exe_path = os.path.abspath(sys.executable)
