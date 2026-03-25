@@ -571,6 +571,14 @@ def autoLogin(user_ID):
     start_wait = time.time()
     while time.time() - start_wait < input_timeout:
         try:
+            robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+            if robot_close and robot_close[0].is_displayed():
+                log_msg("首頁偵測到機器人驗證/系統提示，嘗試關閉...")
+                robot_close[0].click()
+                time.sleep(0.5)
+        except: pass
+        
+        try:
             driver.find_element(By.NAME,"pageIdNo").clear()
             driver.find_element(By.NAME,"pageIdNo").send_keys(user_ID)
             break
@@ -601,6 +609,14 @@ def autoLogin(user_ID):
             raise LoginTimeoutError("Timeout")
 
         time.sleep(base_wait) 
+        
+        try:
+            robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+            if robot_close and robot_close[0].is_displayed():
+                log_msg("登入等待期間偵測到機器人驗證/系統提示，嘗試關閉...")
+                robot_close[0].click()
+                time.sleep(0.5)
+        except: pass
         
         try:
             from selenium.webdriver.support import expected_conditions as EC
@@ -2138,18 +2154,22 @@ class App(tk.Tk):
                 
                 # 設定為 1/4 大小 (寬一半、高一半)
                 w, h = sw // 2, sh // 2
-                # 放置於畫面左上角，並保留 50 像素的空白(不要緊貼邊緣)
                 x, y = 50, 50 
                 
-                # 調整大小位置並彈到上層
-                ctypes.windll.user32.SetWindowPos(hwnd, 0, x, y, w, h, 0x0040) # 0x0040 = SWP_SHOWWINDOW
+                # 關鍵修正：-1 代表 HWND_TOPMOST (強制無敵置頂，連 Chrome 都蓋不掉)
+                # 0x0040 = SWP_SHOWWINDOW
+                ctypes.windll.user32.SetWindowPos(hwnd, -1, x, y, w, h, 0x0040)
                 ctypes.windll.user32.SetForegroundWindow(hwnd)
+                
+                # 給予 0.5 秒的強制置頂時間對抗 Chrome，然後解除強制置頂 (-2 代表 HWND_NOTOPMOST)
+                # 這樣資料夾能停留在網頁上方，且您後續點擊網頁時，網頁還是可以正常蓋過資料夾
+                self.after(500, lambda: ctypes.windll.user32.SetWindowPos(hwnd, -2, x, y, w, h, 0x0040))
+                
         except Exception as e:
             log_msg(f"資料夾視窗自動排版失敗: {e}")
 
         # 資料夾排版完成後，再間隔 1 秒 (1000毫秒)，最後才跳出程式完成提示
         self.after(1000, self._pop_topmost_message, "任務搞定！報告已經產生！\n\n網頁與資料夾已為您開啟。")
-
     def _pop_topmost_message(self, msg):
         # 將主程式拉到最上層
         self.attributes('-topmost', True)
