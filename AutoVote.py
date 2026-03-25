@@ -14,12 +14,13 @@ import subprocess
 import concurrent.futures
 import threading
 import uuid
+import json
 import requests
 import subprocess
 import urllib.parse
 from __version__ import CURRENT_VERSION
 
-# 這是未來你要放 version.json 的網址，我們先寫個假名，晚點會換成真實的 GitHub 網址
+
 VERSION_INFO_URL = "https://raw.githubusercontent.com/marslin1027-sudo/AutoVoteApp/refs/heads/main/version.json"
 from PIL import Image
 
@@ -48,6 +49,8 @@ driver = None
 voteinfolist = {}
 base_path = "./screenshots/"
 shareholderIDs = []
+saved_sites = {} # <--- 新增：用來儲存自訂網址的字典
+browser_choice = "Edge" # <--- 新增：預設瀏覽器
 
 # 新增：速率分離與視窗記憶
 vote_speed = 2.0  
@@ -69,6 +72,7 @@ session_results = {}
 user_name_map = {}
 execution_logs = []
 ignore_update_until = 0.0 # <--- 新增：紀錄暫停自動檢查更新的時間戳記
+last_selected_site = "【不開啟任何網頁】" # <--- 新增：記憶上次選擇的網頁
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--log-level=3"
 
@@ -1521,16 +1525,40 @@ class App(tk.Tk):
         
         main_font = ('Microsoft JhengHei', 10)
         bold_font = ('Microsoft JhengHei', 10, 'bold')
-        self.style.configure('.', font=main_font, background='#f0f2f5')
-        self.style.configure('TFrame', background='#f0f2f5')
-        self.style.configure('TLabelframe', background='#f0f2f5', font=bold_font, foreground='#333333')
-        self.style.configure('TLabelframe.Label', background='#f0f2f5', font=bold_font, foreground='#333333')
-        self.style.configure('Action.TButton', font=bold_font, foreground='white', background='#0056b3', borderwidth=0)
-        self.style.map('Action.TButton', background=[('active', '#004494')])
-        self.style.configure('Normal.TButton', font=main_font)
-        self.style.configure('Red.TButton', font=bold_font, foreground='white', background='#d9534f', borderwidth=0)
-        self.style.map('Red.TButton', background=[('active', '#c9302c')]) 
-        self.style.configure('TLabel', background='#f0f2f5', font=main_font)
+        # --- UI 極簡黑白專業風 (搭配重點紅) ---
+        app_bg = '#E8E8E8'     # 改為灰色背景
+        text_color = '#111111' # 深黑文字
+        
+        self.configure(bg=app_bg) 
+
+        self.style.configure('.', font=main_font, background=app_bg, foreground=text_color)
+        self.style.configure('TFrame', background=app_bg)
+        
+        # 標題外框：黑白對比
+        self.style.configure('TLabelframe', background=app_bg, font=bold_font, foreground=text_color)
+        self.style.configure('TLabelframe.Label', background=app_bg, font=bold_font, foreground=text_color)
+        
+        # 啟動動作按鈕：深灰色 (專業感)
+        self.style.configure('Action.TButton', font=bold_font, foreground='white', background='#333333', borderwidth=0)
+        self.style.map('Action.TButton', background=[('active', '#000000')])
+        
+        # 一般按鈕：淺灰色
+        self.style.configure('Normal.TButton', font=main_font, foreground=text_color, background='#CCCCCC')
+        self.style.map('Normal.TButton', background=[('active', '#AAAAAA')])
+        
+        # 撤銷/儲存/危險按鈕：重點紅色 (保留)
+        self.style.configure('Red.TButton', font=bold_font, foreground='white', background='#CC0000', borderwidth=0)
+        self.style.map('Red.TButton', background=[('active', '#990000')]) 
+        
+        self.style.configure('TLabel', background=app_bg, font=main_font, foreground=text_color)
+        
+        # 標籤頁 (Notebook)：灰白切換
+        self.style.configure('TNotebook', background='#D0D0D0')
+        self.style.configure('TNotebook.Tab', font=bold_font, padding=[12, 6], background='#D0D0D0', foreground='#444444')
+        self.style.map('TNotebook.Tab', background=[('selected', '#E8E8E8')], foreground=[('selected', '#000000')])
+        # -------------------
+
+        
         try:
             import sys
             import os
@@ -1639,9 +1667,12 @@ class App(tk.Tk):
             close_btn.pack(pady=(0, 5), ipadx=20)
 
     def load_config(self):
-        global shareholderIDs, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until
+        global shareholderIDs, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
         conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
         vote_conf_path = os.path.join(CONFIG_DIR, 'vote_setting.conf')
+        
+        if not isinstance(saved_sites, dict): saved_sites = {}
+
         if os.path.exists(conf_path):
             try:
                 with open(conf_path, 'r', encoding='utf8') as f:
@@ -1650,18 +1681,20 @@ class App(tk.Tk):
                         if "screenshot_mode:::" in line: screenshot_mode = int(line.split(":::")[1])
                         if "vote_speed:::" in line: vote_speed = float(line.split(":::")[1])
                         if "shot_speed:::" in line: shot_speed = float(line.split(":::")[1])
-                        if "time_speed:::" in line:  
-                            vote_speed = float(line.split(":::")[1])
-                            shot_speed = float(line.split(":::")[1])
                         if "login_type:::" in line: login_type = line.split(":::")[1]
                         if "disclaimer_agreed:::" in line: disclaimer_agreed = (line.split(":::")[1].strip() == 'True') 
                         if "main_window_geom:::" in line: main_window_geom = line.split(":::")[1].strip()
                         if "disc_window_geom:::" in line: disc_window_geom = line.split(":::")[1].strip()
                         if "join_draw:::" in line: join_draw = (line.split(":::")[1].strip() == 'True')
-                        if "ignore_update_until:::" in line: ignore_update_until = float(line.split(":::")[1]) # 新增讀取
+                        if "ignore_update_until:::" in line: ignore_update_until = float(line.split(":::")[1])
+                        if "browser_choice:::" in line: browser_choice = line.split(":::")[1].strip()
+                        if "last_selected_site:::" in line: last_selected_site = line.split(":::")[1].strip() # <--- 讀取上次記憶網頁
+                        if "saved_sites:::" in line: 
+                            try: saved_sites = json.loads(line.split(":::")[1])
+                            except: saved_sites = {}
                         if "shareholderIDs:::" in line: 
                             encrypted_ids = line.split(":::")[1]
-                            decrypted_ids = decrypt_data(encrypted_ids)
+                            decrypted_ids = decrypted_ids = decrypt_data(encrypted_ids)
                             if decrypted_ids: shareholderIDs = decrypted_ids.split("|/|")
             except: pass
             
@@ -1677,7 +1710,6 @@ class App(tk.Tk):
                         if "abstain:::" in line: abstain_list = [k for k in line.split(":::")[1].split("|/|") if k]
             except: pass
 
-        # ====== 下方這些是上次漏掉的 UI 變數綁定 ======
         self.vote_speed_var = tk.StringVar(value=str(vote_speed))
         self.shot_speed_var = tk.StringVar(value=str(shot_speed))
         self.screenshot_mode_var = tk.IntVar(value=screenshot_mode)
@@ -1685,9 +1717,10 @@ class App(tk.Tk):
         ids_str = ",".join(shareholderIDs) if shareholderIDs else ""
         self.ids_var = tk.StringVar(value=ids_str)
         self.revoke_mode_var = tk.StringVar(value="specific")
+        self.browser_choice_var = tk.StringVar(value=browser_choice)
 
     def save_config(self):
-        global vote_speed, shot_speed, screenshot_mode, shareholderIDs, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until
+        global vote_speed, shot_speed, screenshot_mode, shareholderIDs, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
         try:
             try: 
                 v_val = float(self.vote_speed_var.get()); vote_speed = v_val 
@@ -1698,6 +1731,12 @@ class App(tk.Tk):
             screenshot_mode = self.screenshot_mode_var.get()
             login_type = self.login_type_cb.get()
             join_draw = self.join_draw_var.get() 
+            browser_choice = self.browser_choice_var.get() 
+            
+            # 取得最後選擇的網頁
+            if hasattr(self, 'selected_site'):
+                last_selected_site = self.selected_site.get()
+                
             shareholderIDs = [x.strip() for x in self.ids_var.get().split(',') if x.strip()]
             conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
             with open(conf_path, 'w', encoding='utf8') as f:
@@ -1709,12 +1748,16 @@ class App(tk.Tk):
                 f.write(f"main_window_geom:::{main_window_geom}\n")
                 f.write(f"disc_window_geom:::{disc_window_geom}\n")
                 f.write(f"join_draw:::{join_draw}\n")
-                f.write(f"ignore_update_until:::{ignore_update_until}\n") # <--- 新增儲存
+                f.write(f"ignore_update_until:::{ignore_update_until}\n")
+                f.write(f"browser_choice:::{browser_choice}\n") 
+                f.write(f"last_selected_site:::{last_selected_site}\n") # <--- 寫入記憶
+                f.write(f"saved_sites:::{json.dumps(saved_sites, ensure_ascii=False)}\n")
                 encrypted_str = encrypt_data('|/|'.join(shareholderIDs))
                 f.write(f"shareholderIDs:::{encrypted_str}\n")
                 f.write("hash:::SECURE_ENCRYPTED_V4\n")
             log_msg("設定已儲存。")
         except Exception as e: log_msg(f"儲存設定失敗: {e}")
+    
 
     # 速率微調輔助函數
     def _adj_val(self, var, delta):
@@ -1739,14 +1782,16 @@ class App(tk.Tk):
         tab1 = ttk.Frame(tab_control, padding="10")
         tab2 = ttk.Frame(tab_control, padding="10") 
         tab3 = ttk.Frame(tab_control, padding="10")
-        tab4 = ttk.Frame(tab_control, padding="10") # <--- 新增 tab4
+        tab4 = ttk.Frame(tab_control, padding="10") 
+        tab5 = ttk.Frame(tab_control, padding="10") # <--- 新增 tab5 (網址管理)
         
         tab_control.add(tab1, text='  自動任務  ')
         tab_control.add(tab2, text='  撤銷投票  ')
         tab_control.add(tab3, text='  設定  ')
-        tab_control.add(tab4, text='  系統資訊  ') # <--- 新增 tab4 的標籤
+        tab_control.add(tab4, text='  系統資訊  ') 
+        tab_control.add(tab5, text='  網址管理  ') # <--- 加入選單
 
-        # 將執行狀態框綁在 main_container 上，我們等一下用動態 pack 的方式放進分頁
+        # 執行狀態框
         self.frame_log = ttk.LabelFrame(main_container, text=" 執行狀態 ")
         self.log_text = scrolledtext.ScrolledText(self.frame_log, height=8, state='disabled', font=('Consolas', 9), bg='#ffffff', fg='#333333')
         self.log_text.pack(expand=True, fill="both", padx=5, pady=5)
@@ -1758,11 +1803,11 @@ class App(tk.Tk):
         # === Tab 1: 自動任務 ===
         # ==========================================
         frame_mode = ttk.LabelFrame(tab1, text=" 自動化小幫手 ")
-        frame_mode.pack(fill="x", pady=(5, 15), ipady=5)
+        frame_mode.pack(fill="x", pady=(5, 5), ipady=5)
         desc_lbl = ttk.Label(frame_mode, text="說明: 設定好帳號，程式會自動幫您完成投票與截圖存檔，輕鬆領紀念品！")
-        desc_lbl.pack(padx=10, pady=(5,10), anchor="w")
+        desc_lbl.pack(padx=10, pady=(5,5), anchor="w")
         btn_mode1 = ttk.Button(frame_mode, text="啟動程式", style='Action.TButton', command=self.start_mode_1, cursor="hand2")
-        btn_mode1.pack(fill="x", padx=15, pady=10)
+        btn_mode1.pack(fill="x", padx=15, pady=5)
         
         frame_mode2 = ttk.LabelFrame(tab1, text=" 單筆補圖工具 ")
         frame_mode2.pack(fill="x", pady=5, ipady=5)
@@ -1773,23 +1818,50 @@ class App(tk.Tk):
         self.single_id_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
         ttk.Label(grid_frame, text="股票代號:\n(可貼上Excel欄位\n或用逗號區隔)").grid(row=1, column=0, padx=5, pady=5, sticky="nw")
-        
         text_frame = ttk.Frame(grid_frame)
         text_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        
-        self.stock_list_entry = tk.Text(text_frame, width=40, height=4, font=('Microsoft JhengHei', 10))
+        self.stock_list_entry = tk.Text(text_frame, width=40, height=3, font=('Microsoft JhengHei', 10))
         self.stock_list_entry.pack(side="left", fill="both", expand=True)
-        
         scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.stock_list_entry.yview)
         scrollbar.pack(side="right", fill="y")
         self.stock_list_entry.configure(yscrollcommand=scrollbar.set)
         
         grid_frame.columnconfigure(1, weight=1)
         btn_mode2 = ttk.Button(frame_mode2, text="執行單筆補圖", style='Normal.TButton', command=self.start_mode_2, cursor="hand2")
-        btn_mode2.pack(fill="x", padx=15, pady=10)
+        btn_mode2.pack(fill="x", padx=15, pady=5)
 
-        ttk.Label(frame_mode2, text="💡 小撇步: 身分證欄位留空，系統會自動抓取「設定」裡的所有帳號喔！", foreground="#FF4500", font=('Microsoft JhengHei', 9, 'bold')).pack(pady=(0, 10))
+        ttk.Label(frame_mode2, text="💡 小撇步: 身分證欄位留空，系統會自動抓取「設定」裡的所有帳號喔！", foreground="#FF4500", font=('Microsoft JhengHei', 9, 'bold')).pack(pady=(0, 5))
 
+        # ==========================================
+        # === Tab 1 新增: 後續動作區 (黑白灰風格) ===
+        # ==========================================
+        frame_post_action = ttk.LabelFrame(tab1, text=" 任務完成後動作 ")
+        frame_post_action.pack(fill="x", pady=(0, 5), ipady=5, padx=2)
+
+        action_inner = ttk.Frame(frame_post_action)
+        action_inner.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Label(action_inner, text="選擇使用的瀏覽器:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        browser_frame = ttk.Frame(action_inner)
+        browser_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(browser_frame, text="Edge", variable=self.browser_choice_var, value="Edge").pack(side="left", padx=(0, 15))
+        ttk.Radiobutton(browser_frame, text="Chrome", variable=self.browser_choice_var, value="Chrome").pack(side="left")
+
+        # --- 換成黑白灰風格的背景 ---
+        pop_bg = '#DCDCDC' # 灰階底色
+        combo_row_frame = tk.Frame(action_inner, bg=pop_bg, padx=5, pady=4)
+        combo_row_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
+
+        tk.Label(combo_row_frame, text="✨ 任務完畢後開啟:", bg=pop_bg, font=('Microsoft JhengHei', 10, 'bold'), fg='#000000').pack(side="left", padx=5)
+        
+        # 綁定全域記憶變數 last_selected_site
+        self.selected_site = tk.StringVar(value=last_selected_site)
+        self.site_combo = ttk.Combobox(combo_row_frame, textvariable=self.selected_site, state="readonly", width=35)
+        self.site_combo.pack(side="left", padx=5, fill="x", expand=True)
+        # --- 區塊結束 ---
+        
+        action_inner.columnconfigure(1, weight=1)
+        
         # ==========================================
         # === Tab 2: 撤銷投票 ===
         # ==========================================
@@ -1848,27 +1920,22 @@ class App(tk.Tk):
         spd_frame = ttk.Frame(frame_setting)
         spd_frame.pack(fill="x", pady=2)
         
-        # 速率分離：投票速率
         v_frame = ttk.Frame(spd_frame)
         v_frame.pack(fill="x", pady=2)
         ttk.Label(v_frame, text="投票速度：", width=20).pack(side="left")
-        
         ttk.Button(v_frame, text="-", width=1, command=lambda: self._adj_val(self.vote_speed_var, -0.1)).pack(side="left", padx=2)
         ttk.Entry(v_frame, textvariable=self.vote_speed_var, width=8, justify='center').pack(side="left", padx=2)
         ttk.Button(v_frame, text="+", width=1, command=lambda: self._adj_val(self.vote_speed_var, 0.1)).pack(side="left", padx=2)
         ttk.Label(v_frame, text="(0.1=極速, 10=慢速)", foreground="#666").pack(side="left", padx=5)
 
-        # 速率分離：截圖速率
         s_frame = ttk.Frame(spd_frame)
         s_frame.pack(fill="x", pady=2)
         ttk.Label(s_frame, text="截圖速度：", width=20).pack(side="left")
-        
         ttk.Button(s_frame, text="-", width=1, command=lambda: self._adj_val(self.shot_speed_var, -0.1)).pack(side="left", padx=2)
         ttk.Entry(s_frame, textvariable=self.shot_speed_var, width=8, justify='center').pack(side="left", padx=2)
         ttk.Button(s_frame, text="+", width=1, command=lambda: self._adj_val(self.shot_speed_var, 0.1)).pack(side="left", padx=2)
         ttk.Label(s_frame, text="(0.1=極速, 10=慢速)", foreground="#666").pack(side="left", padx=5)
         
-        # 輸入法提醒備註
         ttk.Label(spd_frame, text="💡 提醒：若無法輸入小數點，請切換至英文輸入法", foreground="#d9534f").pack(anchor="w", pady=(5, 0))
         ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
         
@@ -1879,15 +1946,12 @@ class App(tk.Tk):
         ttk.Radiobutton(file_frame, text="B. 全部放在一起同一資料夾(檔名會加上戶名)", variable=self.screenshot_mode_var, value=2).pack(anchor="w", padx=10)
         ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
 
-        # =========== 新增抽獎設定區塊 ===========
         draw_frame = ttk.Frame(frame_setting)
         draw_frame.pack(fill="x", pady=2)
-        tk.Checkbutton(draw_frame, text="遇到抽獎頁面時，暫停 5 分鐘讓我手動參加抽獎", variable=self.join_draw_var, bg='#f0f2f5', activebackground='#f0f2f5', font=('Microsoft JhengHei', 10)).pack(anchor="w")
+        tk.Checkbutton(draw_frame, text="遇到抽獎頁面時，暫停 5 分鐘讓我手動參加抽獎", variable=self.join_draw_var, bg='#F5F7FA', activebackground='#F5F7FA', font=('Microsoft JhengHei', 10)).pack(anchor="w")
         ttk.Label(draw_frame, text="(若未勾選則程式會自動關閉視窗略過)", foreground="#666").pack(anchor="w", padx=20)
         ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
-        # =======================================
         
-        # 原本設定分頁的最後一個區塊
         id_frame = ttk.Frame(frame_setting)
         id_frame.pack(fill="x", pady=2)
         ttk.Label(id_frame, text="我的帳號清單 (多個請用逗號分隔):").pack(anchor="w")
@@ -1896,7 +1960,7 @@ class App(tk.Tk):
         ttk.Button(frame_setting, text="檢查程式更新", style='Normal.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=5, ipady=1, fill='x')
 
         # ==========================================
-        # === Tab 4: 系統資訊 (路徑與免責聲明) ===
+        # === Tab 4: 系統資訊 ===
         # ==========================================
         frame_info = ttk.Frame(tab4)
         frame_info.pack(fill="both", expand=True, padx=10, pady=12)
@@ -1917,17 +1981,184 @@ class App(tk.Tk):
         path_entry_shot.configure(state="readonly")
         path_entry_shot.pack(fill="x", padx=10, pady=(0,10))
 
-        # 免責聲明區塊
         disc_frame = ttk.LabelFrame(frame_info, text=" 📜 授權與聲明 ")
         disc_frame.pack(fill="x", pady=(0, 5))
-        
         ttk.Label(disc_frame, text="本程式僅供個人輔助使用，無任何資料上傳行為。\n第一次啟動時已確認授權，您也可隨時重新閱讀。", justify="center").pack(pady=10)
-        
         btn_disclaimer = ttk.Button(disc_frame, text="📝 重新閱讀免責聲明", command=lambda: self.show_disclaimer(force_show=True))
         btn_disclaimer.pack(pady=(0, 10), ipadx=10)
+
+        # ==========================================
+        # === Tab 5: 網址管理 (獨立設定與刪除) ===
+        # ==========================================
+        frame_url = ttk.Frame(tab5)
+        frame_url.pack(fill="both", expand=True, padx=10, pady=12)
+
+        manage_frame = ttk.LabelFrame(frame_url, text=" 📝 新增完成後開啟的網站 ")
+        manage_frame.pack(fill="x", pady=5, ipady=10)
+
+        grid_url = ttk.Frame(manage_frame)
+        grid_url.pack(fill="x", padx=10, pady=5)
         
-        # === 初始化排版魔法：把 Log 框先塞進 tab1 並讓它往下長滿空間 ===
+        ttk.Label(grid_url, text="自訂名稱:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.entry_name = ttk.Entry(grid_url)
+        self.entry_name.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+
+        ttk.Label(grid_url, text="網址 (URL):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.entry_url = ttk.Entry(grid_url)
+        self.entry_url.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        btn_frame = ttk.Frame(manage_frame)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="儲存 / 新增", command=self.add_site).pack(side="left", padx=10)
+        grid_url.columnconfigure(1, weight=1)
+
+        del_frame = ttk.LabelFrame(frame_url, text=" 🗑️ 刪除已儲存的網站 ")
+        del_frame.pack(fill="x", pady=15, ipady=10)
+        
+        del_inner = ttk.Frame(del_frame)
+        del_inner.pack(fill="x", padx=10, pady=10)
+        ttk.Label(del_inner, text="選擇要刪除的網站:").pack(side="left", padx=(10, 5))
+        
+        self.manage_selected_site = tk.StringVar()
+        self.manage_site_combo = ttk.Combobox(del_inner, textvariable=self.manage_selected_site, state="readonly", width=30)
+        self.manage_site_combo.pack(side="left", padx=10)
+        ttk.Button(del_inner, text="刪除此網站", command=self.delete_site, style='Red.TButton').pack(side="left", padx=10)
+
+        ttk.Label(frame_url, text="💡 設定好的網址可以在「自動任務」分頁底下的藍色區塊挑選！", foreground="#666").pack(pady=10)
+
+        # === 初始化排版魔法 ===
         self.frame_log.pack(in_=tab1, fill="both", expand=True, pady=(5, 0))
+        self.update_site_list() # 初始化網址清單
+
+    # ================= 新增：網址管理與後續動作 =================
+    def update_site_list(self):
+        site_names = list(saved_sites.keys())
+        
+        # 1. 更新首頁下拉選單 (加入不開啟選項)
+        tab1_options = ["【不開啟任何網頁】"] + site_names
+        self.site_combo['values'] = tab1_options
+        
+        # 若上次儲存的選項在列表中，則選中它，否則預設不開啟
+        if last_selected_site in tab1_options:
+            self.selected_site.set(last_selected_site)
+        elif self.selected_site.get() not in tab1_options:
+            self.selected_site.set("【不開啟任何網頁】")
+            
+        # 2. 更新管理頁面下拉選單 (純資料清單)
+        self.manage_site_combo['values'] = site_names
+        if site_names:
+            if self.manage_selected_site.get() not in site_names:
+                self.manage_selected_site.set(site_names[0])
+        else:
+            self.manage_selected_site.set("")
+
+    def add_site(self):
+        name = self.entry_name.get().strip()
+        url = self.entry_url.get().strip()
+        if not name or not url:
+            messagebox.showwarning("提示", "名稱和網址都不能是空的喔！")
+            return
+        saved_sites[name] = url
+        self.save_config()
+        self.update_site_list()
+        
+        # 新增完自動切換
+        self.selected_site.set(name) 
+        self.manage_selected_site.set(name)
+        
+        self.entry_name.delete(0, tk.END)
+        self.entry_url.delete(0, tk.END)
+        log_msg(f"✅ 已儲存網站: {name}")
+
+    def delete_site(self):
+        target = self.manage_selected_site.get()
+        if not target: 
+            messagebox.showwarning("提示", "請先選擇要刪除的網站！")
+            return
+        if messagebox.askyesno("確認", f"確定要在資料庫中刪除「{target}」嗎？"):
+            if target in saved_sites:
+                del saved_sites[target]
+                self.save_config()
+                self.update_site_list()
+                log_msg(f"🗑️ 已刪除網站: {target}")
+
+    # ================= 新增：網址管理與智慧彈跳控制 =================
+    def _finish_task(self):
+        # 判斷本次是否有成功截圖的項目
+        total_screenshots = sum(len(res.get('success_screenshot', [])) for res in session_results.values())
+        has_shots = total_screenshots > 0
+
+        if has_shots:
+            # 1. 跑完報告後先開啟網頁
+            target_name = self.selected_site.get()
+            browser = self.browser_choice_var.get()
+            
+            if target_name != "【不開啟任何網頁】" and target_name:
+                url = saved_sites.get(target_name, "")
+                if url:
+                    log_msg(f"準備使用 {browser} 開啟設定網頁: {target_name}")
+                    try:
+                        if browser == "Edge": subprocess.Popen(f'start msedge "{url}"', shell=True)
+                        elif browser == "Chrome": subprocess.Popen(f'start chrome "{url}"', shell=True)
+                    except Exception as e:
+                        log_msg(f"開啟瀏覽器時發生錯誤: {e}")
+
+            # 2. 開完網頁後，間隔 1 秒 (1000毫秒) 再開啟資料夾
+            self.after(1000, self._open_folder_and_notify)
+        else:
+            # 如果沒做任何截圖動作，就不用開視窗了
+            log_msg("本次無執行截圖，不開啟設定網頁與資料夾。")
+            self._pop_topmost_message("任務搞定！報告已經產生！\n\n(提示：本次無執行截圖，故未開啟網頁與資料夾)")
+
+    def _open_folder_and_notify(self):
+        abs_path = os.path.abspath(base_path)
+        log_msg("正在為您開啟截圖資料夾...")
+        try:
+            # 這時候開資料夾，會自動疊在剛剛開好的網頁上方
+            subprocess.Popen(f'explorer "{abs_path}"')
+        except Exception as e:
+            log_msg(f"開啟截圖資料夾失敗: {e}")
+
+        # 等資料夾視窗出現 (給系統1.2秒反應時間)，再進行排版
+        self.after(1200, self._resize_folder_and_notify, abs_path)
+
+    def _resize_folder_and_notify(self, abs_path):
+        import ctypes
+        try:
+            folder_name = os.path.basename(abs_path)
+            # 尋找 Windows 檔案總管視窗
+            hwnd = ctypes.windll.user32.FindWindowW("CabinetWClass", folder_name)
+            if not hwnd:
+                hwnd = ctypes.windll.user32.FindWindowW(None, folder_name)
+
+            if hwnd:
+                # 取得螢幕解析度
+                sw = ctypes.windll.user32.GetSystemMetrics(0)
+                sh = ctypes.windll.user32.GetSystemMetrics(1)
+                
+                # 設定為 1/4 大小 (寬一半、高一半)
+                w, h = sw // 2, sh // 2
+                # 放置於畫面左上角，並保留 50 像素的空白(不要緊貼邊緣)
+                x, y = 50, 50 
+                
+                # 調整大小位置並彈到上層
+                ctypes.windll.user32.SetWindowPos(hwnd, 0, x, y, w, h, 0x0040) # 0x0040 = SWP_SHOWWINDOW
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception as e:
+            log_msg(f"資料夾視窗自動排版失敗: {e}")
+
+        # 資料夾排版完成後，再間隔 1 秒 (1000毫秒)，最後才跳出程式完成提示
+        self.after(1000, self._pop_topmost_message, "任務搞定！報告已經產生！\n\n網頁與資料夾已為您開啟。")
+
+    def _pop_topmost_message(self, msg):
+        # 將主程式拉到最上層
+        self.attributes('-topmost', True)
+        self.update()
+        # 關鍵：馬上解除最上層鎖定，讓彈跳視窗不會死鎖在螢幕前
+        self.attributes('-topmost', False)
+        # 跳出提醒
+        messagebox.showinfo("完成", msg)
+    # =======================================================
 
     def on_tab_change(self, event):
         selected_tab = event.widget.select()
@@ -2089,8 +2320,15 @@ class App(tk.Tk):
         end_time = time.time()
         generate_session_report(start_time, end_time, total_items)
         log_msg("=== 任務全部完成 ===")
-        if maintenance_flag: messagebox.showwarning("暫停", "因為系統維護，目前已終止任務！")
-        else: messagebox.showinfo("完成", "任務搞定！報告已經產生！")
+        if maintenance_flag: 
+            # 遇到系統維護也彈一下，避免被蓋住
+            self.attributes('-topmost', True)
+            self.update()
+            self.attributes('-topmost', False)
+            messagebox.showwarning("暫停", "因為系統維護，目前已終止任務！")
+        else: 
+            # 觸發全新的 UI 動線
+            self.after(0, self._finish_task)
 
     def run_logic_mode_2(self, id_list, stocks_str):
         global driver, session_results, user_name_map, login_type
@@ -2149,11 +2387,15 @@ class App(tk.Tk):
         end_time = time.time()
         generate_session_report(start_time, end_time, total_items)
         log_msg("=== 補圖任務結束 ===")
-        messagebox.showinfo("完成", "截圖任務完畢")
+        
+        # 觸發全新的 UI 動線
+        self.after(0, self._finish_task)
+        #messagebox.showinfo("完成", "截圖任務完畢")
 
     def run_logic_mode_3(self, id_list, mode, stock_list):
         global driver, session_results, user_name_map, login_type
         session_results = {}; user_name_map = {} 
+        start_time = time.time() # <--- 新增：開始計時
         
         log_msg(f"=== 開始撤銷任務 ({'全部' if mode=='all' else '指定'})，共 {len(id_list)} 個帳號 ===")
         
@@ -2195,8 +2437,19 @@ class App(tk.Tk):
             force_quit_driver(driver)
             driver = None
 
+        end_time = time.time() # <--- 新增：結束計時
+        total_items = sum(len(res.get('success', [])) for res in session_results.values()) # <--- 計算總撤銷數
+        
+        # --- 新增：產生報告 ---
+        generate_session_report(start_time, end_time, total_items)
+        
         log_msg("=== 撤銷任務結束 ===")
-        messagebox.showinfo("完成", "撤銷任務執行完畢")
+        
+        # 讓撤銷完畢的彈窗也維持在最上層，不會被蓋住
+        self.attributes('-topmost', True)
+        self.update()
+        self.attributes('-topmost', False)
+        messagebox.showinfo("完成", "撤銷任務執行完畢，報告已產生！")
 
 if __name__ == "__main__":
     app = App()
