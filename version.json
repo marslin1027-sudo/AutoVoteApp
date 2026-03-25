@@ -1,6 +1,6 @@
 {
-    "version": "2.1",
-    "url": "https://github.com/marslin1027-sudo/AutoVoteApp/releases/download/v2.1/AutoVote_v2.1.exe",
+    "version": "2.2",
+    "url": "https://github.com/marslin1027-sudo/AutoVoteApp/releases/download/v2.2/AutoVote_v2.2.exe",
     "date": "2026-03-26",
-    "notes": "登入機器人驗證檢查"
+    "notes": "跳過填MAIL"
 }
