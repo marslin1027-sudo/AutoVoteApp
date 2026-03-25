@@ -660,43 +660,62 @@ def autoLogin(user_ID):
         except SystemMaintenanceError: raise
         except: pass
 
-        try: 
-            btn = driver.find_element(By.ID, "comfirmDialog_okBtn")
-            if btn.is_displayed(): btn.click()
-        except: pass
+        # ------------------- 登入後的雜項彈窗清理 (包含Email抽獎、同意條款等) -------------------
+        for _ in range(3): # 循環3次，對付連續跳出的多重彈窗
+            # 1. 通用系統確認按鈕
+            try: 
+                btn = driver.find_element(By.ID, "comfirmDialog_okBtn")
+                if btn.is_displayed(): btn.click(); time.sleep(0.5)
+            except: pass
+            
+            # 2. 抽獎/Email 專用略過按鈕
+            try:
+                skip_btn = driver.find_element(By.ID, "comfirmDialog_skipBtn")
+                if skip_btn.is_displayed(): skip_btn.click(); time.sleep(0.5)
+            except: pass
+            
+            # 3. 找尋「略過」、「稍後」、「不參加」等文字按鈕 (對付各種 Email 填寫變化)
+            try:
+                text_btns = driver.find_elements(By.XPATH, "//button[contains(text(),'略過')] | //button[contains(text(),'稍後')] | //button[contains(text(),'不參加')] | //a[contains(text(),'略過')] | //a[contains(text(),'稍後')]")
+                for tb in text_btns:
+                    if tb.is_displayed():
+                        tb.click()
+                        time.sleep(0.5)
+                        break
+            except: pass
 
-        try:
-            agree_link = driver.find_element(By.CSS_SELECTOR, 'a[id="agreeLink"]')
-            if agree_link.is_displayed():
-                original_window = driver.current_window_handle
-                old_handles = set(driver.window_handles)
-                agree_link.click()
-                for _ in range(20):
-                    try:
-                        new_handles = set(driver.window_handles)
-                        if len(new_handles - old_handles) > 0: break
-                    except: pass
-                    time.sleep(0.2)
-                close_tdcc_upload_tab_and_back(driver, original_window=original_window, timeout=5)
-                time.sleep(0.5)
-        except: pass
+            # 4. 同意條款流程 (閱讀條款 -> 打勾 -> 同意)
+            try:
+                agree_link = driver.find_element(By.CSS_SELECTOR, 'a[id="agreeLink"]')
+                if agree_link.is_displayed():
+                    original_window = driver.current_window_handle
+                    old_handles = set(driver.window_handles)
+                    agree_link.click()
+                    for _ in range(20):
+                        try:
+                            if len(set(driver.window_handles) - old_handles) > 0: break
+                        except: pass
+                        time.sleep(0.2)
+                    close_tdcc_upload_tab_and_back(driver, original_window=original_window, timeout=5)
+                    time.sleep(0.5)
+            except: pass
 
-        try:
-            agree_terms = driver.find_element(By.CSS_SELECTOR, 'input[id="agreeTerms"]')
-            if agree_terms.is_displayed() and not agree_terms.is_selected():
-                agree_terms.click()
-                time.sleep(0.5)
-        except: pass
+            try:
+                agree_terms = driver.find_element(By.CSS_SELECTOR, 'input[id="agreeTerms"]')
+                if agree_terms.is_displayed() and not agree_terms.is_selected():
+                    agree_terms.click(); time.sleep(0.5)
+            except: pass
 
-        try:
-            agree_btn = driver.find_element(By.CSS_SELECTOR, 'a[class="btnAgree btn-style btn-b btn-lg"]')
-            if agree_btn.is_displayed(): agree_btn.click()
-        except: pass
+            try:
+                agree_btn = driver.find_element(By.CSS_SELECTOR, 'a[class="btnAgree btn-style btn-b btn-lg"]')
+                if agree_btn.is_displayed(): agree_btn.click(); time.sleep(0.5)
+            except: pass
 
-        try:
-            btn1 = driver.find_element(By.NAME, 'btn1')
-            if btn1.is_displayed(): btn1.click()
-        except: pass
+            # 5. 其他莫名其妙的 btn1
+            try:
+                btn1 = driver.find_element(By.NAME, 'btn1')
+                if btn1.is_displayed(): btn1.click(); time.sleep(0.5)
+            except: pass
 
 def process_single_revoke():
     global driver, vote_speed
