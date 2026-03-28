@@ -1,6 +1,6 @@
 {
-    "version": "2.4",
-    "url": "https://github.com/marslin1027-sudo/AutoVoteApp/releases/download/v2.4/AutoVote_v2.4.exe",
-    "date": "2026-03-28",
-    "notes": "例行性更新與效能優化"
+    "version": "2.5",
+    "url": "https://github.com/marslin1027-sudo/AutoVoteApp/releases/download/v2.5/AutoVote_v2.5.exe",
+    "date": "2026-03-29",
+    "notes": "執行失敗會跳警示視窗"
 }
