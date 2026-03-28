@@ -570,13 +570,6 @@ def autoLogin(user_ID):
     input_timeout = max(2.0, 10.0 * vote_speed)
     start_wait = time.time()
     while time.time() - start_wait < input_timeout:
-        try:
-            robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
-            if robot_close and robot_close[0].is_displayed():
-                log_msg("首頁偵測到機器人驗證/系統提示，嘗試關閉...")
-                robot_close[0].click()
-                time.sleep(0.1)
-        except: pass
 
         try:
             msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
@@ -586,6 +579,14 @@ def autoLogin(user_ID):
                 time.sleep(0.1)
         except: pass
         
+        try:
+            robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+            if robot_close and robot_close[0].is_displayed():
+                log_msg("首頁偵測到機器人驗證/系統提示，嘗試關閉...")
+                robot_close[0].click()
+                time.sleep(0.1)
+        except: pass
+
         try:
             driver.find_element(By.NAME,"pageIdNo").clear()
             driver.find_element(By.NAME,"pageIdNo").send_keys(user_ID)
@@ -616,7 +617,7 @@ def autoLogin(user_ID):
             log_msg(f"登入超時 (超過{int(HARD_TIMEOUT_SECONDS)}秒)，強制換下一個。")
             raise LoginTimeoutError("Timeout")
 
-        time.sleep(base_wait) 
+        time.sleep(base_wait*0.5) 
 
         try:
             msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
@@ -959,7 +960,7 @@ def voting():
                         time.sleep(base_wait * 3)
                         continue
                     elif not logged_hidden_robot:
-                        log_msg("(除錯) 發現機器人按鈕元素，但目前狀態為『不可見』(可能被遮擋或尚未載入完成)")
+                        log_msg("發現機器人驗證按鈕(可能被遮擋或尚未載入完成)")
                         logged_hidden_robot = True # 只印一次避免洗畫面
             except Exception as e:
                 log_msg(f"處理機器人驗證時發生錯誤: {e}")
@@ -2214,15 +2215,25 @@ class App(tk.Tk):
 
         # 資料夾排版完成後，再間隔 1 秒 (1000毫秒)，最後才跳出程式完成提示
         self.after(1000, self._pop_topmost_message, "任務搞定！報告已經產生！\n\n網頁與資料夾已為您開啟。")
+
     def _pop_topmost_message(self, msg):
         # 將主程式拉到最上層
         self.attributes('-topmost', True)
         self.update()
         # 關鍵：馬上解除最上層鎖定，讓彈跳視窗不會死鎖在螢幕前
         self.attributes('-topmost', False)
-        # 跳出提醒
-        messagebox.showinfo("完成", msg)
-    # =======================================================
+        
+        # 統計失敗數量 (包含投票失敗與截圖失敗)
+        fail_count = sum(len(res.get('fail_vote', [])) + len(res.get('fail_screenshot', [])) for res in session_results.values())
+
+        if fail_count > 0:
+            # 如果有失敗，將原本預設的成功字眼換掉，並加上警告提示
+            msg = msg.replace("任務搞定！", "任務執行結束！")
+            warning_msg = f"{msg}\n\n⚠️ 注意：偵測到 {fail_count} 筆「投票」或「截圖」失敗！\n👉 請務必查看 LOG 報告檔確認詳細失敗原因，並視情況重新跑一次。"
+            messagebox.showwarning("任務結束 (有部分失敗)", warning_msg)
+        else:
+            # 完全成功的情況，維持原本的提示
+            messagebox.showinfo("完成", msg)
 
     def on_tab_change(self, event):
         selected_tab = event.widget.select()
