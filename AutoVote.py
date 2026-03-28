@@ -577,6 +577,14 @@ def autoLogin(user_ID):
                 robot_close[0].click()
                 time.sleep(0.5)
         except: pass
+
+        try:
+            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+            if msg_btns and msg_btns[0].is_displayed():
+                log_msg("首頁偵測到系統對話框 (機器人驗證)，嘗試關閉...")
+                msg_btns[0].click()
+                time.sleep(0.5)
+        except: pass
         
         try:
             driver.find_element(By.NAME,"pageIdNo").clear()
@@ -615,6 +623,14 @@ def autoLogin(user_ID):
             if robot_close and robot_close[0].is_displayed():
                 log_msg("登入等待期間偵測到機器人驗證/系統提示，嘗試關閉...")
                 robot_close[0].click()
+                time.sleep(0.5)
+        except: pass
+        
+        try:
+            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+            if msg_btns and msg_btns[0].is_displayed():
+                log_msg("登入期間偵測到系統對話框 (機器人驗證)，嘗試關閉...")
+                msg_btns[0].click()
                 time.sleep(0.5)
         except: pass
         
