@@ -575,7 +575,7 @@ def autoLogin(user_ID):
             if robot_close and robot_close[0].is_displayed():
                 log_msg("首頁偵測到機器人驗證/系統提示，嘗試關閉...")
                 robot_close[0].click()
-                time.sleep(0.5)
+                time.sleep(0.1)
         except: pass
 
         try:
@@ -583,7 +583,7 @@ def autoLogin(user_ID):
             if msg_btns and msg_btns[0].is_displayed():
                 log_msg("首頁偵測到系統對話框 (機器人驗證)，嘗試關閉...")
                 msg_btns[0].click()
-                time.sleep(0.5)
+                time.sleep(0.1)
         except: pass
         
         try:
@@ -617,23 +617,32 @@ def autoLogin(user_ID):
             raise LoginTimeoutError("Timeout")
 
         time.sleep(base_wait) 
+
+        try:
+            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+            if msg_btns and msg_btns[0].is_displayed():
+                log_msg("登入期間偵測到系統對話框 (機器人驗證)，嘗試關閉...")
+                msg_btns[0].click()
+                time.sleep(0.1)
+                try: 
+                    driver.find_element(By.ID, 'loginBtn').click() # 關閉後立刻再按一次登入
+                    log_msg("已重新點擊登入按鈕")
+                except: pass
+        except: pass
         
         try:
             robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
             if robot_close and robot_close[0].is_displayed():
                 log_msg("登入等待期間偵測到機器人驗證/系統提示，嘗試關閉...")
                 robot_close[0].click()
-                time.sleep(0.5)
+                time.sleep(0.1)
+                try: 
+                    driver.find_element(By.ID, 'loginBtn').click() # 關閉後立刻再按一次登入
+                    log_msg("已重新點擊登入按鈕")
+                except: pass
         except: pass
         
-        try:
-            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
-            if msg_btns and msg_btns[0].is_displayed():
-                log_msg("登入期間偵測到系統對話框 (機器人驗證)，嘗試關閉...")
-                msg_btns[0].click()
-                time.sleep(0.5)
-        except: pass
-        
+                
         try:
             from selenium.webdriver.support import expected_conditions as EC
             from selenium.webdriver.support.ui import WebDriverWait
@@ -2008,7 +2017,7 @@ class App(tk.Tk):
         ttk.Label(id_frame, text="我的帳號清單 (多個請用逗號分隔):").pack(anchor="w")
         ttk.Entry(id_frame, textvariable=self.ids_var).pack(fill="x", pady=1)
         ttk.Button(frame_setting, text="儲存設定 (加密)", style='Red.TButton', command=self.save_config, cursor="hand2").pack(pady=2, ipady=1, fill='x')
-        ttk.Button(frame_setting, text="檢查程式更新", style='Normal.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=5, ipady=1, fill='x')
+        ttk.Button(frame_setting, text="檢查程式更新", style='Action.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=5, ipady=1, fill='x')
 
         # ==========================================
         # === Tab 4: 系統資訊 ===
