@@ -48,7 +48,7 @@ debug = 0
 driver = None
 voteinfolist = {}
 base_path = "./screenshots/"
-shareholderIDs = []
+user_accounts = [] # <--- 新增：取代 shareholderIDs，儲存格式為 [{'name': '...', 'id': '...', 'login_type': '...'}]
 saved_sites = {} # <--- 新增：用來儲存自訂網址的字典
 browser_choice = "Edge" # <--- 新增：預設瀏覽器
 
@@ -57,6 +57,7 @@ vote_speed = 2.0
 shot_speed = 0.5
 main_window_geom = ""
 disc_window_geom = ""
+pane_sash_pos = 0 #
 
 screenshot_mode = 1 
 manual_vote = False
@@ -553,9 +554,9 @@ def pass_active_form():
     except:
         pass
 
-def autoLogin(user_ID):
-    global driver, vote_speed, login_type
-    log_msg(f"正在為您登入帳號: {user_ID}")
+def autoLogin(user_ID, current_login_type="券商網路下單憑證"):
+    global driver, vote_speed
+    log_msg(f"正在為您登入帳號: {user_ID} ({current_login_type})")
     
     base_wait = 0.1 * vote_speed
     try:
@@ -594,21 +595,21 @@ def autoLogin(user_ID):
         except: time.sleep(base_wait)
     
     try: 
-        log_msg(f"選擇登入方式: {login_type}")
-        driver.find_element(By.NAME,"caType").send_keys(login_type)
+        log_msg(f"選擇登入方式: {current_login_type}")
+        driver.find_element(By.NAME,"caType").send_keys(current_login_type)
     except: pass
     
     try: driver.find_element(By.ID, 'loginBtn').click()
     except: pass
     
     is_mobile_or_natural = False
-    if login_type == "券商網路下單憑證":
+    if current_login_type == "券商網路下單憑證":
         HARD_TIMEOUT_SECONDS = 20.0
         log_msg("等待券商憑證驗證 (限時20秒)...")
     else:
         is_mobile_or_natural = True
         HARD_TIMEOUT_SECONDS = 120.0
-        log_msg(f"等待{login_type} (請注意手機/插卡，限時2分鐘)...")
+        log_msg(f"等待{current_login_type} (請注意手機/插卡，限時2分鐘)...")
     
     login_start_time = time.time()
     
@@ -1456,8 +1457,9 @@ def write_voteinfolist(voteinfolist):
 def read_voteinfolist(voteinfolist):
     base = os.path.join(CONFIG_DIR, "queue_data")
     if not os.path.exists(base): return
-    global shareholderIDs
-    for uid in shareholderIDs:
+    global user_accounts
+    for acc in user_accounts:
+        uid = acc['id']
         if not uid: continue
         safe_dirname = get_anonymous_dirname(uid)
         user_path = os.path.join(base, safe_dirname)
@@ -1495,7 +1497,7 @@ def generate_session_report(start_t=None, end_t=None, count=0):
             
             # --- 新增：速率與環境紀錄 ---
             f.write(f"【執行環境設定】\n")
-            f.write(f"  - 登入方式: {login_type}\n")
+            f.write(f"  - 登入方式: 依各帳號設定獨立切換\n")
             f.write(f"  - 投票操作速率: {vote_speed}\n")
             f.write(f"  - 截圖等待速率: {shot_speed}\n")
             # --------------------------
@@ -1562,11 +1564,12 @@ class App(tk.Tk):
         self.load_config()
         
         # 套用記憶的主視窗大小，或使用預設大小
+        # 套用記憶的主視窗大小，或使用預設大小
         if main_window_geom:
             self.geometry(main_window_geom)
         else:
-            window_width = 615
-            window_height = 680
+            window_width = 950  # <--- 加寬以容納右邊的狀態區
+            window_height = 680 # <--- 高度可微縮減
             screen_width = self.winfo_screenwidth()
             screen_height = self.winfo_screenheight()      
             x_cordinate = int(screen_width / 8) 
@@ -1641,8 +1644,12 @@ class App(tk.Tk):
         self.after(100, lambda: check_for_updates(auto=True))
         
     def on_closing(self):
-        global main_window_geom
+        global main_window_geom, pane_sash_pos
         main_window_geom = self.geometry()
+        # 捕捉 PanedWindow 的分隔線位置 (如果有的話)
+        if hasattr(self, 'pane'):
+            try: pane_sash_pos = self.pane.sashpos(0)
+            except: pass
         self.save_config()
         self.destroy()
 
@@ -1728,7 +1735,7 @@ class App(tk.Tk):
             close_btn.pack(pady=(0, 5), ipadx=20)
 
     def load_config(self):
-        global shareholderIDs, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
+        global user_accounts, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
         conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
         vote_conf_path = os.path.join(CONFIG_DIR, 'vote_setting.conf')
         
@@ -1748,15 +1755,25 @@ class App(tk.Tk):
                         if "disc_window_geom:::" in line: disc_window_geom = line.split(":::")[1].strip()
                         if "join_draw:::" in line: join_draw = (line.split(":::")[1].strip() == 'True')
                         if "ignore_update_until:::" in line: ignore_update_until = float(line.split(":::")[1])
+                        if "pane_sash_pos:::" in line: pane_sash_pos = int(line.split(":::")[1]) # <--- 新增讀取
                         if "browser_choice:::" in line: browser_choice = line.split(":::")[1].strip()
                         if "last_selected_site:::" in line: last_selected_site = line.split(":::")[1].strip() # <--- 讀取上次記憶網頁
                         if "saved_sites:::" in line: 
                             try: saved_sites = json.loads(line.split(":::")[1])
                             except: saved_sites = {}
-                        if "shareholderIDs:::" in line: 
-                            encrypted_ids = line.split(":::")[1]
-                            decrypted_ids = decrypted_ids = decrypt_data(encrypted_ids)
-                            if decrypted_ids: shareholderIDs = decrypted_ids.split("|/|")
+                        if "user_accounts:::" in line:
+                            try:
+                                dec = decrypt_data(line.split(":::")[1])
+                                if dec: user_accounts = json.loads(dec)
+                            except: pass
+                        # 舊版資料相容性轉換
+                        if "shareholderIDs:::" in line and not user_accounts: 
+                            try:
+                                dec = decrypt_data(line.split(":::")[1])
+                                if dec: 
+                                    old_ids = dec.split("|/|")
+                                    user_accounts = [{'name': f'帳號{i+1}', 'id': x.strip(), 'login_type': login_type} for i, x in enumerate(old_ids) if x.strip()]
+                            except: pass
             except: pass
             
         if os.path.exists(vote_conf_path):
@@ -1775,13 +1792,19 @@ class App(tk.Tk):
         self.shot_speed_var = tk.StringVar(value=str(shot_speed))
         self.screenshot_mode_var = tk.IntVar(value=screenshot_mode)
         self.join_draw_var = tk.BooleanVar(value=join_draw) 
-        ids_str = ",".join(shareholderIDs) if shareholderIDs else ""
-        self.ids_var = tk.StringVar(value=ids_str)
         self.revoke_mode_var = tk.StringVar(value="specific")
         self.browser_choice_var = tk.StringVar(value=browser_choice)
 
     def save_config(self):
-        global vote_speed, shot_speed, screenshot_mode, shareholderIDs, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
+        global vote_speed, shot_speed, screenshot_mode, login_type, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site, pane_sash_pos
+        
+        # 🟢 在儲存前，主動抓取最新的視窗大小與左右分隔線位置
+        try:
+            main_window_geom = self.geometry()
+            if hasattr(self, 'pane'):
+                pane_sash_pos = self.pane.sashpos(0)
+        except: pass
+
         try:
             try: 
                 v_val = float(self.vote_speed_var.get()); vote_speed = v_val 
@@ -1790,7 +1813,6 @@ class App(tk.Tk):
                 messagebox.showerror("設定錯誤", "速度倍率請輸入有效的數字")
                 return
             screenshot_mode = self.screenshot_mode_var.get()
-            login_type = self.login_type_cb.get()
             join_draw = self.join_draw_var.get() 
             browser_choice = self.browser_choice_var.get() 
             
@@ -1798,8 +1820,8 @@ class App(tk.Tk):
             if hasattr(self, 'selected_site'):
                 last_selected_site = self.selected_site.get()
                 
-            shareholderIDs = [x.strip() for x in self.ids_var.get().split(',') if x.strip()]
             conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
+            
             with open(conf_path, 'w', encoding='utf8') as f:
                 f.write(f"screenshot_mode:::{screenshot_mode}\n")
                 f.write(f"vote_speed:::{vote_speed}\n")
@@ -1810,11 +1832,14 @@ class App(tk.Tk):
                 f.write(f"disc_window_geom:::{disc_window_geom}\n")
                 f.write(f"join_draw:::{join_draw}\n")
                 f.write(f"ignore_update_until:::{ignore_update_until}\n")
+                f.write(f"pane_sash_pos:::{pane_sash_pos}\n") # <--- 新增寫入
                 f.write(f"browser_choice:::{browser_choice}\n") 
                 f.write(f"last_selected_site:::{last_selected_site}\n") # <--- 寫入記憶
                 f.write(f"saved_sites:::{json.dumps(saved_sites, ensure_ascii=False)}\n")
-                encrypted_str = encrypt_data('|/|'.join(shareholderIDs))
-                f.write(f"shareholderIDs:::{encrypted_str}\n")
+                
+                # 改為加密儲存 JSON 格式的 user_accounts
+                encrypted_acc = encrypt_data(json.dumps(user_accounts, ensure_ascii=False))
+                f.write(f"user_accounts:::{encrypted_acc}\n")
                 f.write("hash:::SECURE_ENCRYPTED_V4\n")
             log_msg("設定已儲存。")
         except Exception as e: log_msg(f"儲存設定失敗: {e}")
@@ -1834,67 +1859,280 @@ class App(tk.Tk):
             # 如果使用者手動輸入了非數字，點擊按鈕時不作動或可重設為 1.0
             pass
 
+    def build_user_checklist(self, parent, vars_dict, select_all=True):
+        container = ttk.Frame(parent)
+        container.pack(fill="both", expand=True)
+
+        select_all_var = tk.BooleanVar(value=select_all)
+        def toggle_all():
+            state = select_all_var.get()
+            for v in vars_dict.values(): v.set(state)
+
+        tk.Checkbutton(container, text="全選", variable=select_all_var, command=toggle_all, bg='#E8E8E8', activebackground='#E8E8E8', selectcolor='#FFFFFF').pack(anchor="w", pady=(0, 2))
+
+        base_frame = tk.Frame(container, bg='#E8E8E8')
+        base_frame.pack(fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(base_frame, orient="vertical")
+        # 高度稍微加高到 60，避免太扁卡住
+        canvas = tk.Canvas(base_frame, height=30, bg='#E8E8E8', highlightthickness=0, yscrollcommand=scrollbar.set)
+        scrollbar.config(command=canvas.yview)
+        
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame._canvas = canvas
+        scrollable_frame._scrollbar = scrollbar
+
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        # --- 新增：滑鼠滾輪支援 ---
+        def _on_mousewheel(event):
+            # 判斷滾輪方向進行捲動
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        # 滑鼠移入區塊時綁定滾輪，移出時解除，避免影響整個視窗
+        canvas.bind('<Enter>', lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all("<MouseWheel>"))
+        # -------------------------
+
+        # 確保捲軸排版正確
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # 預設先隱藏捲軸，交由後續動態判斷
+        scrollbar.pack_forget()
+        
+        return scrollable_frame
+
+    def refresh_user_lists(self):
+        # 清除現有清單
+        for w in self.auto_scroll_frame.winfo_children(): w.destroy()
+        for w in self.single_scroll_frame.winfo_children(): w.destroy()
+        for w in self.revoke_scroll_frame.winfo_children(): w.destroy()
+        
+        self.check_vars_auto.clear()
+        self.check_vars_single.clear()
+        self.check_vars_revoke.clear()
+
+        # 重新生成檢查框 (改用 grid 橫向排列，節省垂直空間)
+        max_cols = 5 # 每行最多顯示 5 個帳號 (超過自動換行)
+        col_idx = 0
+        row_idx = 0
+
+        for acc in user_accounts:
+            uid = acc['id']
+            disp_text = f"{acc['name']}"
+
+            self.check_vars_auto[uid] = tk.BooleanVar(value=True)
+            self.check_vars_single[uid] = tk.BooleanVar(value=True)
+            self.check_vars_revoke[uid] = tk.BooleanVar(value=True)
+
+            tk.Checkbutton(self.auto_scroll_frame, text=disp_text, variable=self.check_vars_auto[uid], bg='#E8E8E8', activebackground='#E8E8E8', selectcolor='#FFFFFF').grid(row=row_idx, column=col_idx, padx=(0, 15), pady=1, sticky="w")
+            tk.Checkbutton(self.single_scroll_frame, text=disp_text, variable=self.check_vars_single[uid], bg='#E8E8E8', activebackground='#E8E8E8', selectcolor='#FFFFFF').grid(row=row_idx, column=col_idx, padx=(0, 15), pady=1, sticky="w")
+            tk.Checkbutton(self.revoke_scroll_frame, text=disp_text, variable=self.check_vars_revoke[uid], bg='#E8E8E8', activebackground='#E8E8E8', selectcolor='#FFFFFF').grid(row=row_idx, column=col_idx, padx=(0, 15), pady=1, sticky="w")
+            
+            col_idx += 1
+            if col_idx >= max_cols:
+                col_idx = 0
+                row_idx += 1
+
+        
+        # 檢查並隱藏/顯示捲軸的輔助函式
+        def update_scroll_visibility(frame):
+            frame.update_idletasks() # 強制計算目前內容高度
+            canvas = frame._canvas
+            scrollbar = frame._scrollbar
+            # 取得內容實際需要的總高度
+            req_h = frame.winfo_reqheight()
+            
+            # --- 💡 彈性高度魔法 ---
+            # 假設一行約 32 像素，兩行約 62 像素
+            if req_h <= 35:
+                # 只有一行：畫布縮小到剛好容納一行
+                new_h = req_h if req_h > 10 else 32
+                scrollbar.pack_forget()
+            elif req_h <= 65:
+                # 有兩行：畫布撐開到剛好容納兩行
+                new_h = req_h
+                scrollbar.pack_forget()
+            else:
+                # 超過兩行：畫布固定在兩行的高度 (65)，並顯示捲軸
+                new_h = 65
+                scrollbar.pack(side="right", fill="y")
+            
+            # 套用新高度
+            canvas.config(height=new_h)
+
+        # 針對三個頁面的清單執行捲軸判斷
+        update_scroll_visibility(self.auto_scroll_frame)
+        update_scroll_visibility(self.single_scroll_frame)
+        update_scroll_visibility(self.revoke_scroll_frame)
+
+        # 更新設定頁面的樹狀表
+        for item in self.user_tree.get_children(): self.user_tree.delete(item)
+        for acc in user_accounts:
+            self.user_tree.insert("", "end", values=(acc['name'], acc['id'], acc['login_type']))
+            
+    def add_or_update_user(self):
+        name = self.entry_uname.get().strip()
+        uid = self.entry_uid.get().strip().upper()
+        login = self.combo_ulogin.get().strip()
+        
+        if not name or not uid:
+            messagebox.showwarning("提示", "姓名與身分證不能空白！")
+            return
+        
+        # 1. 檢查防呆：確保「姓名」沒有和「其他身分證」的帳號重複
+        for acc in user_accounts:
+            if acc['id'] != uid and acc['name'] == name:
+                messagebox.showerror("錯誤", f"姓名「{name}」已存在於其他帳號中，請使用不同的名稱！")
+                return
+
+        # 2. 檢查身分證是否已經存在
+        target_idx = -1
+        for i, acc in enumerate(user_accounts):
+            if acc['id'] == uid:
+                target_idx = i
+                break
+                
+        if target_idx != -1:
+            # 身分證已存在 -> 彈出視窗詢問是否覆蓋
+            old_name = user_accounts[target_idx]['name']
+            if not messagebox.askyesno("重複確認", f"身分證「{uid}」已經存在 (原姓名：{old_name})。\n\n請問是否要覆蓋更新此帳號的資料？"):
+                return # 選擇「否」就直接中斷，不儲存
+                
+            # 選擇「是」，進行覆蓋更新
+            user_accounts[target_idx]['name'] = name
+            user_accounts[target_idx]['login_type'] = login
+            log_msg(f"✅ 已更新帳號資料: {name} ({uid})")
+        else:
+            # 找不到一樣的身分證 -> 直接作為新帳號加入
+            user_accounts.append({'name': name, 'id': uid, 'login_type': login})
+            log_msg(f"✅ 已新增帳號: {name} ({uid})")
+            
+        # 存檔、刷新介面並清空輸入框
+        self.save_config()
+        self.refresh_user_lists()
+        self.entry_uname.delete(0, tk.END)
+        self.entry_uid.delete(0, tk.END)
+        
+    def delete_selected_user(self):
+        selected = self.user_tree.selection()
+        if not selected: return
+        
+        # 關鍵修正：加上 str() 強制轉回字串，避免純數字帳號(如 1111) 被 tkinter 轉成整數導致比對失敗
+        uid = str(self.user_tree.item(selected[0])['values'][1])
+        
+        global user_accounts
+        # 重新過濾名單，把符合該 id 的帳號排除
+        user_accounts = [acc for acc in user_accounts if str(acc['id']) != uid]
+        
+        self.save_config()
+        self.refresh_user_lists()
+        log_msg(f"🗑️ 已刪除帳號: {uid}")
+        
     def create_widgets(self):
-        main_container = ttk.Frame(self, padding="15")
+        main_container = ttk.Frame(self, padding="10")
         main_container.pack(fill="both", expand=True)
         
-        tab_control = ttk.Notebook(main_container)
+        # ==========================================
+        # 🌟 PanedWindow (分隔面板) 
+        # ==========================================
+        self.pane = ttk.PanedWindow(main_container, orient=tk.HORIZONTAL)
+        self.pane.pack(fill="both", expand=True)
+        
+        left_frame = ttk.Frame(self.pane)
+        right_frame = ttk.Frame(self.pane)
+        
+        # ⚠️ 關鍵修正 1：左側 weight 設為 0，右側 weight 設為 1
+        # 這樣左側就會變成「固定寬度 (由記憶決定)」，不會被系統強制比例洗掉！
+        self.pane.add(left_frame, weight=1)
+        self.pane.add(right_frame, weight=1)
+               
+        right_content = ttk.Frame(right_frame, padding=(10, 0, 0, 0))
+        right_content.pack(fill="both", expand=True)
+
+        tab_control = ttk.Notebook(left_frame)
         
         tab1 = ttk.Frame(tab_control, padding="10")
         tab2 = ttk.Frame(tab_control, padding="10") 
         tab3 = ttk.Frame(tab_control, padding="10")
         tab4 = ttk.Frame(tab_control, padding="10") 
-        tab5 = ttk.Frame(tab_control, padding="10") # <--- 新增 tab5 (網址管理)
+        tab5 = ttk.Frame(tab_control, padding="10")
         
         tab_control.add(tab1, text='  自動任務  ')
         tab_control.add(tab2, text='  撤銷投票  ')
         tab_control.add(tab3, text='  設定  ')
         tab_control.add(tab4, text='  系統資訊  ') 
-        tab_control.add(tab5, text='  網址管理  ') # <--- 加入選單
-
-        # 執行狀態框
-        self.frame_log = ttk.LabelFrame(main_container, text=" 執行狀態 ")
-        self.log_text = scrolledtext.ScrolledText(self.frame_log, height=8, state='disabled', font=('Consolas', 9), bg='#ffffff', fg='#333333')
-        self.log_text.pack(expand=True, fill="both", padx=5, pady=5)
+        tab_control.add(tab5, text='  網址管理  ')
 
         tab_control.pack(side="top", expand=True, fill="both")
-        tab_control.bind("<<NotebookTabChanged>>", self.on_tab_change)
+
+        # ==========================================
+        # 🌟 執行狀態框 
+        # ==========================================
+        self.frame_log = ttk.LabelFrame(right_content, text=" 執行狀態 ")
+        self.frame_log.pack(fill="both", expand=True)
+        self.log_text = scrolledtext.ScrolledText(self.frame_log, width=50, state='disabled', font=('Consolas', 9), bg='#ffffff', fg='#333333')
+        self.log_text.pack(expand=True, fill="both", padx=5, pady=5)
+        
 
         # ==========================================
         # === Tab 1: 自動任務 ===
         # ==========================================
+        self.check_vars_auto = {}
+        self.check_vars_single = {}
+        self.check_vars_revoke = {}
+
         frame_mode = ttk.LabelFrame(tab1, text=" 自動化小幫手 ")
         frame_mode.pack(fill="x", pady=(5, 5), ipady=5)
-        desc_lbl = ttk.Label(frame_mode, text="說明: 設定好帳號，程式會自動幫您完成投票與截圖存檔，輕鬆領紀念品！")
-        desc_lbl.pack(padx=10, pady=(5,5), anchor="w")
+        
+        ttk.Label(frame_mode, text="說明: 勾選要處理的帳號，程式會自動幫您完成投票與截圖存檔！", wraplength=360).pack(padx=10, pady=(5,0), anchor="w")
+        
+        list_container1 = ttk.Frame(frame_mode)
+        list_container1.pack(fill="x", padx=10, pady=2)
+        self.auto_scroll_frame = self.build_user_checklist(list_container1, self.check_vars_auto)
+
         btn_mode1 = ttk.Button(frame_mode, text="啟動程式", style='Action.TButton', command=self.start_mode_1, cursor="hand2")
         btn_mode1.pack(fill="x", padx=15, pady=5)
         
         frame_mode2 = ttk.LabelFrame(tab1, text=" 單筆補圖工具 ")
         frame_mode2.pack(fill="x", pady=5, ipady=5)
+        
+        ttk.Label(frame_mode2, text="勾選補圖帳號:").pack(anchor="w", padx=10)
+        list_container2 = ttk.Frame(frame_mode2)
+        list_container2.pack(fill="x", padx=10, pady=2)
+        self.single_scroll_frame = self.build_user_checklist(list_container2, self.check_vars_single)
+
         grid_frame = ttk.Frame(frame_mode2)
         grid_frame.pack(fill="x", padx=10, pady=5)
-        ttk.Label(grid_frame, text="身分證字號:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.single_id_entry = ttk.Entry(grid_frame, width=40)
-        self.single_id_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        ttk.Label(grid_frame, text="股票代號:\n(可貼上Excel欄位\n或用逗號區隔)").grid(row=1, column=0, padx=5, pady=5, sticky="nw")
+        ttk.Label(grid_frame, text="股票代號:\n(可貼上Excel欄位\n或用逗號區隔)").grid(row=0, column=0, padx=5, pady=5, sticky="nw")
         text_frame = ttk.Frame(grid_frame)
-        text_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        self.stock_list_entry = tk.Text(text_frame, width=40, height=3, font=('Microsoft JhengHei', 10))
-        self.stock_list_entry.pack(side="left", fill="both", expand=True)
-        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.stock_list_entry.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.stock_list_entry.configure(yscrollcommand=scrollbar.set)
+        text_frame.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
+        self.stock_list_entry = tk.Text(text_frame, width=20, height=3, font=('Microsoft JhengHei', 10))
+        self.stock_list_entry.pack(side="left", fill="both", expand=True)
+        # 🌟 智慧捲軸機制 (單筆補圖)
+        scrollbar1 = ttk.Scrollbar(text_frame, orient="vertical", command=self.stock_list_entry.yview)
+        self.stock_list_entry.configure(yscrollcommand=scrollbar1.set)
+        
+        def auto_hide_scrollbar1(event):
+            # 判斷文字總行數是否超過設定的 height(3)，超過就顯示捲軸
+            if float(self.stock_list_entry.index('end-1c').split('.')[0]) > 3:
+                scrollbar1.pack(side="right", fill="y")
+            else:
+                scrollbar1.pack_forget()
+        self.stock_list_entry.bind('<KeyRelease>', auto_hide_scrollbar1)
+
         grid_frame.columnconfigure(1, weight=1)
+        
         btn_mode2 = ttk.Button(frame_mode2, text="執行單筆補圖", style='Normal.TButton', command=self.start_mode_2, cursor="hand2")
         btn_mode2.pack(fill="x", padx=15, pady=5)
-
-        ttk.Label(frame_mode2, text="💡 小撇步: 身分證欄位留空，系統會自動抓取「設定」裡的所有帳號喔！", foreground="#FF4500", font=('Microsoft JhengHei', 9, 'bold')).pack(pady=(0, 5))
-
+        
         # ==========================================
-        # === Tab 1 新增: 後續動作區 (黑白灰風格) ===
+        # === Tab 1 新增: 後續動作區 ===
         # ==========================================
         frame_post_action = ttk.LabelFrame(tab1, text=" 任務完成後動作 ")
         frame_post_action.pack(fill="x", pady=(0, 5), ipady=5, padx=2)
@@ -1908,18 +2146,15 @@ class App(tk.Tk):
         ttk.Radiobutton(browser_frame, text="Edge", variable=self.browser_choice_var, value="Edge").pack(side="left", padx=(0, 15))
         ttk.Radiobutton(browser_frame, text="Chrome", variable=self.browser_choice_var, value="Chrome").pack(side="left")
 
-        # --- 換成黑白灰風格的背景 ---
-        pop_bg = '#DCDCDC' # 灰階底色
+        pop_bg = '#DCDCDC'
         combo_row_frame = tk.Frame(action_inner, bg=pop_bg, padx=5, pady=4)
         combo_row_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
 
         tk.Label(combo_row_frame, text="✨ 任務完畢後開啟:", bg=pop_bg, font=('Microsoft JhengHei', 10, 'bold'), fg='#000000').pack(side="left", padx=5)
         
-        # 綁定全域記憶變數 last_selected_site
         self.selected_site = tk.StringVar(value=last_selected_site)
-        self.site_combo = ttk.Combobox(combo_row_frame, textvariable=self.selected_site, state="readonly", width=35)
+        self.site_combo = ttk.Combobox(combo_row_frame, textvariable=self.selected_site, state="readonly", width=18)
         self.site_combo.pack(side="left", padx=5, fill="x", expand=True)
-        # --- 區塊結束 ---
         
         action_inner.columnconfigure(1, weight=1)
         
@@ -1929,96 +2164,135 @@ class App(tk.Tk):
         frame_revoke = ttk.LabelFrame(tab2, text=" 撤銷投票小幫手 ")
         frame_revoke.pack(fill="x", pady=5, ipady=5)
         
+        ttk.Label(frame_revoke, text="勾選撤銷帳號:").pack(anchor="w", padx=10, pady=(5,0))
+        list_container3 = ttk.Frame(frame_revoke)
+        list_container3.pack(fill="x", padx=10, pady=2)
+        self.revoke_scroll_frame = self.build_user_checklist(list_container3, self.check_vars_revoke)
+
         r_grid = ttk.Frame(frame_revoke)
         r_grid.pack(fill="x", padx=10, pady=5)
-        
-        ttk.Label(r_grid, text="身分證字號:").grid(row=0, column=0, padx=5, pady=7, sticky="w")
-        self.revoke_id_entry = ttk.Entry(r_grid, width=40)
-        self.revoke_id_entry.grid(row=0, column=1, padx=5, pady=7, sticky="ew")
-        ttk.Label(r_grid, text="(留空則載入設定帳號)", foreground="#888").grid(row=0, column=2, padx=5, sticky="w")
         
         ttk.Label(r_grid, text="撤銷模式:").grid(row=1, column=0, padx=5, pady=7, sticky="nw")
         mode_frame = ttk.Frame(r_grid)
         mode_frame.grid(row=1, column=1, padx=5, pady=5, sticky="w", columnspan=2)
-        ttk.Radiobutton(mode_frame, text="指定代號撤銷", variable=self.revoke_mode_var, value="specific").pack(side="left", padx=(0, 15))
-        ttk.Radiobutton(mode_frame, text="全部撤銷 (掃描列表)", variable=self.revoke_mode_var, value="all").pack(side="left")
+        ttk.Radiobutton(mode_frame, text="指定代號", variable=self.revoke_mode_var, value="specific").pack(side="left", padx=(0, 10))
+        ttk.Radiobutton(mode_frame, text="全部", variable=self.revoke_mode_var, value="all").pack(side="left")
         
         ttk.Label(r_grid, text="指定股票代號:\n(全部撤銷免填)").grid(row=2, column=0, padx=5, pady=8, sticky="nw")
-        
         r_text_frame = ttk.Frame(r_grid)
         r_text_frame.grid(row=2, column=1, padx=6, pady=5, sticky="ew")
         
-        self.revoke_stock_list = tk.Text(r_text_frame, width=33, height=8, font=('Microsoft JhengHei', 10))
+        self.revoke_stock_list = tk.Text(r_text_frame, width=20, height=4, font=('Microsoft JhengHei', 10))
         self.revoke_stock_list.pack(side="left", fill="both", expand=True)
-        
+        # 🌟 智慧捲軸機制 (撤銷投票)
         r_scroll = ttk.Scrollbar(r_text_frame, orient="vertical", command=self.revoke_stock_list.yview)
-        r_scroll.pack(side="right", fill="y")
-        
         self.revoke_stock_list.configure(yscrollcommand=r_scroll.set)
         
-        r_grid.columnconfigure(1, weight=1)
-        btn_revoke = ttk.Button(frame_revoke, text="開始撤銷任務", style='Red.TButton', command=self.start_mode_3, cursor="hand2")
-        btn_revoke.pack(fill="x", padx=15, pady=10)
+        def auto_hide_scrollbar_r(event):
+            # 判斷文字總行數是否超過設定的 height(4)，超過就顯示捲軸
+            if float(self.revoke_stock_list.index('end-1c').split('.')[0]) > 4:
+                r_scroll.pack(side="right", fill="y")
+            else:
+                r_scroll.pack_forget()
+        self.revoke_stock_list.bind('<KeyRelease>', auto_hide_scrollbar_r)
         
-        ttk.Label(frame_revoke, text="⚠️ 提示：若電腦有多人憑證，跳出視窗時請務必選擇「對應目前帳號身分證」的憑證！\n完成後程式會自動偵測並繼續下一筆。", foreground="#d9534f", justify="center", font=('Microsoft JhengHei', 9, 'bold')).pack(pady=(0, 10))
-
+        r_grid.columnconfigure(1, weight=1)
+        # 🟢 請在這裡加入這兩行程式碼（新增撤銷按鈕） 🟢
+        btn_mode3 = ttk.Button(frame_revoke, text="執行撤銷投票", style='Red.TButton', command=self.start_mode_3, cursor="hand2")
+        btn_mode3.pack(fill="x", padx=15, pady=(10, 15))
+        
         # ==========================================
         # === Tab 3: 設定 ===
         # ==========================================
         frame_setting = ttk.Frame(tab3)
-        frame_setting.pack(fill="both", expand=True, padx=10, pady=12)
+        frame_setting.pack(fill="both", expand=True, padx=10, pady=5)
         
-        type_frame = ttk.Frame(frame_setting)
-        type_frame.pack(fill="x", pady=2)
-        ttk.Label(type_frame, text="請選擇登入驗證方式:").pack(anchor="w")
-        login_types = ["券商網路下單憑證", "自然人憑證", "行動自然人憑證"]
-        self.login_type_cb = ttk.Combobox(type_frame, values=login_types, state="readonly", width=25)
-        self.login_type_cb.set(login_type if login_type in login_types else "券商網路下單憑證")
-        self.login_type_cb.pack(anchor="w", pady=8)
-        
-        ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
+        user_frame = ttk.LabelFrame(frame_setting, text=" 帳號明細管理 ")
+        user_frame.pack(fill="x", pady=2)
 
+        add_frame = ttk.Frame(user_frame)
+        add_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Label(add_frame, text="姓名:").grid(row=0, column=0, padx=2, pady=5, sticky="e")
+        self.entry_uname = ttk.Entry(add_frame, width=12)
+        self.entry_uname.grid(row=0, column=1, padx=2, pady=5, sticky="we")
+        
+        ttk.Label(add_frame, text="身分證:").grid(row=0, column=2, padx=2, pady=5, sticky="e")
+        self.entry_uid = ttk.Entry(add_frame, width=15)
+        self.entry_uid.grid(row=0, column=3, padx=2, pady=5, sticky="we")
+        
+        ttk.Label(add_frame, text="憑證:").grid(row=1, column=0, padx=2, pady=5, sticky="e")
+        login_types = ["券商網路下單憑證", "自然人憑證", "行動自然人憑證"]
+        self.combo_ulogin = ttk.Combobox(add_frame, values=login_types, state="readonly", width=18)
+        self.combo_ulogin.set("券商網路下單憑證")
+        self.combo_ulogin.grid(row=1, column=1, columnspan=2, padx=2, pady=5, sticky="we")
+        
+        ttk.Button(add_frame, text="儲存", command=self.add_or_update_user).grid(row=1, column=3, padx=5, pady=5, sticky="e")
+        
+        add_frame.columnconfigure(1, weight=1)
+        add_frame.columnconfigure(3, weight=1)
+
+        # 🌟 智慧捲軸機制 (帳號管理 Treeview)
+        tree_frame = ttk.Frame(user_frame)
+        tree_frame.pack(fill="x", padx=5, pady=2)
+        
+        cols = ("name", "id", "login")
+        self.user_tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=3)
+        self.user_tree.heading("name", text="姓名")
+        self.user_tree.heading("id", text="身分證")
+        self.user_tree.heading("login", text="登入方式")
+        self.user_tree.column("name", width=60)
+        self.user_tree.column("id", width=100)
+        self.user_tree.column("login", width=120)
+        
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.user_tree.yview)
+        self.user_tree.configure(yscrollcommand=tree_scroll.set)
+        
+        self.user_tree.pack(side="left", fill="x", expand=True)
+        
+        # 覆寫 refresh_user_lists 來動態檢查此捲軸
+        original_refresh = self.refresh_user_lists
+        def wrapped_refresh():
+            original_refresh()
+            # Treeview 高度設定為 3，如果帳號數 > 3 顯示捲軸
+            if len(self.user_tree.get_children()) > 3:
+                tree_scroll.pack(side="right", fill="y")
+            else:
+                tree_scroll.pack_forget()
+        self.refresh_user_lists = wrapped_refresh
+
+        ttk.Button(user_frame, text="刪除選取帳號", command=self.delete_selected_user, style='Red.TButton').pack(anchor="e", padx=5, pady=(0,5))
+
+        # 速度與進階設定
         spd_frame = ttk.Frame(frame_setting)
         spd_frame.pack(fill="x", pady=2)
         
         v_frame = ttk.Frame(spd_frame)
         v_frame.pack(fill="x", pady=2)
-        ttk.Label(v_frame, text="投票速度：", width=20).pack(side="left")
-        ttk.Button(v_frame, text="-", width=1, command=lambda: self._adj_val(self.vote_speed_var, -0.1)).pack(side="left", padx=2)
-        ttk.Entry(v_frame, textvariable=self.vote_speed_var, width=8, justify='center').pack(side="left", padx=2)
-        ttk.Button(v_frame, text="+", width=1, command=lambda: self._adj_val(self.vote_speed_var, 0.1)).pack(side="left", padx=2)
-        ttk.Label(v_frame, text="(0.1=極速, 10=慢速)", foreground="#666").pack(side="left", padx=5)
+        ttk.Label(v_frame, text="投票速度：", width=10).pack(side="left")
+        ttk.Button(v_frame, text="-", width=2, command=lambda: self._adj_val(self.vote_speed_var, -0.1)).pack(side="left", fill="y", padx=2)
+        ttk.Entry(v_frame, textvariable=self.vote_speed_var, width=5, justify='center').pack(side="left", fill="y", ipady=2, padx=2)
+        ttk.Button(v_frame, text="+", width=2, command=lambda: self._adj_val(self.vote_speed_var, 0.1)).pack(side="left", fill="y", padx=2)
 
         s_frame = ttk.Frame(spd_frame)
         s_frame.pack(fill="x", pady=2)
-        ttk.Label(s_frame, text="截圖速度：", width=20).pack(side="left")
-        ttk.Button(s_frame, text="-", width=1, command=lambda: self._adj_val(self.shot_speed_var, -0.1)).pack(side="left", padx=2)
-        ttk.Entry(s_frame, textvariable=self.shot_speed_var, width=8, justify='center').pack(side="left", padx=2)
-        ttk.Button(s_frame, text="+", width=1, command=lambda: self._adj_val(self.shot_speed_var, 0.1)).pack(side="left", padx=2)
-        ttk.Label(s_frame, text="(0.1=極速, 10=慢速)", foreground="#666").pack(side="left", padx=5)
-        
-        ttk.Label(spd_frame, text="💡 提醒：若無法輸入小數點，請切換至英文輸入法", foreground="#d9534f").pack(anchor="w", pady=(5, 0))
-        ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
-        
+        ttk.Label(s_frame, text="截圖速度：", width=10).pack(side="left")
+        ttk.Button(s_frame, text="-", width=2, command=lambda: self._adj_val(self.shot_speed_var, -0.1)).pack(side="left", fill="y", padx=2)
+        ttk.Entry(s_frame, textvariable=self.shot_speed_var, width=5, justify='center').pack(side="left", fill="y", ipady=2, padx=2)
+        ttk.Button(s_frame, text="+", width=2, command=lambda: self._adj_val(self.shot_speed_var, 0.1)).pack(side="left", fill="y", padx=2)
+
         file_frame = ttk.Frame(frame_setting)
         file_frame.pack(fill="x", pady=2)
         ttk.Label(file_frame, text="截圖存檔方式:").pack(anchor="w", pady=(0,2))
-        ttk.Radiobutton(file_frame, text="A. 每個帳號獨立資料夾", variable=self.screenshot_mode_var, value=1).pack(anchor="w", padx=10)
-        ttk.Radiobutton(file_frame, text="B. 全部放在一起同一資料夾(檔名會加上戶名)", variable=self.screenshot_mode_var, value=2).pack(anchor="w", padx=10)
-        ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
+        ttk.Radiobutton(file_frame, text="各帳號獨立資料夾", variable=self.screenshot_mode_var, value=1).pack(side="left", padx=(10, 5))
+        ttk.Radiobutton(file_frame, text="放一起(檔名含戶名)", variable=self.screenshot_mode_var, value=2).pack(side="left")
 
         draw_frame = ttk.Frame(frame_setting)
-        draw_frame.pack(fill="x", pady=2)
-        tk.Checkbutton(draw_frame, text="遇到抽獎頁面時，暫停 5 分鐘讓我手動參加抽獎", variable=self.join_draw_var, bg='#F5F7FA', activebackground='#F5F7FA', font=('Microsoft JhengHei', 10)).pack(anchor="w")
-        ttk.Label(draw_frame, text="(若未勾選則程式會自動關閉視窗略過)", foreground="#666").pack(anchor="w", padx=20)
-        ttk.Separator(frame_setting, orient='horizontal').pack(fill='x', pady=12)
+        draw_frame.pack(fill="x", pady=5)
+        tk.Checkbutton(draw_frame, text="遇到抽獎頁面時，暫停 5 分鐘讓我手動參加抽獎", variable=self.join_draw_var, bg='#E8E8E8', activebackground='#E8E8E8', font=('Microsoft JhengHei', 10), wraplength=360).pack(anchor="w")
         
-        id_frame = ttk.Frame(frame_setting)
-        id_frame.pack(fill="x", pady=2)
-        ttk.Label(id_frame, text="我的帳號清單 (多個請用逗號分隔):").pack(anchor="w")
-        ttk.Entry(id_frame, textvariable=self.ids_var).pack(fill="x", pady=1)
-        ttk.Button(frame_setting, text="儲存設定 (加密)", style='Red.TButton', command=self.save_config, cursor="hand2").pack(pady=2, ipady=1, fill='x')
-        ttk.Button(frame_setting, text="檢查程式更新", style='Action.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=5, ipady=1, fill='x')
+        ttk.Button(frame_setting, text="儲存全部設定 (含加密)", style='Red.TButton', command=self.save_config, cursor="hand2").pack(pady=2, ipady=1, fill='x')
+        ttk.Button(frame_setting, text="檢查程式更新", style='Action.TButton', command=lambda: check_for_updates(auto=False)).pack(pady=2, ipady=1, fill='x')
 
         # ==========================================
         # === Tab 4: 系統資訊 ===
@@ -2044,12 +2318,12 @@ class App(tk.Tk):
 
         disc_frame = ttk.LabelFrame(frame_info, text=" 📜 授權與聲明 ")
         disc_frame.pack(fill="x", pady=(0, 5))
-        ttk.Label(disc_frame, text="本程式僅供個人輔助使用，無任何資料上傳行為。\n第一次啟動時已確認授權，您也可隨時重新閱讀。", justify="center").pack(pady=10)
+        ttk.Label(disc_frame, text="本程式僅供個人輔助使用，無任何資料上傳行為。\n第一次啟動時已確認授權，您也可隨時重新閱讀。", justify="center", wraplength=320).pack(pady=10)
         btn_disclaimer = ttk.Button(disc_frame, text="📝 重新閱讀免責聲明", command=lambda: self.show_disclaimer(force_show=True))
         btn_disclaimer.pack(pady=(0, 10), ipadx=10)
 
         # ==========================================
-        # === Tab 5: 網址管理 (獨立設定與刪除) ===
+        # === Tab 5: 網址管理 ===
         # ==========================================
         frame_url = ttk.Frame(tab5)
         frame_url.pack(fill="both", expand=True, padx=10, pady=12)
@@ -2078,18 +2352,18 @@ class App(tk.Tk):
         
         del_inner = ttk.Frame(del_frame)
         del_inner.pack(fill="x", padx=10, pady=10)
-        ttk.Label(del_inner, text="選擇要刪除的網站:").pack(side="left", padx=(10, 5))
+        ttk.Label(del_inner, text="選擇要刪除:").pack(side="left", padx=(10, 5))
         
         self.manage_selected_site = tk.StringVar()
-        self.manage_site_combo = ttk.Combobox(del_inner, textvariable=self.manage_selected_site, state="readonly", width=30)
-        self.manage_site_combo.pack(side="left", padx=10)
-        ttk.Button(del_inner, text="刪除此網站", command=self.delete_site, style='Red.TButton').pack(side="left", padx=10)
+        self.manage_site_combo = ttk.Combobox(del_inner, textvariable=self.manage_selected_site, state="readonly", width=18)
+        self.manage_site_combo.pack(side="left", padx=5)
+        ttk.Button(del_inner, text="刪除", command=self.delete_site, style='Red.TButton').pack(side="left", padx=5)
 
-        ttk.Label(frame_url, text="💡 設定好的網址可以在「自動任務」分頁底下的藍色區塊挑選！", foreground="#666").pack(pady=10)
+        ttk.Label(frame_url, text="💡 設定好的網址可以在「自動任務」分頁底下的藍色區塊挑選！", foreground="#666", wraplength=320).pack(pady=10)
 
         # === 初始化排版魔法 ===
-        self.frame_log.pack(in_=tab1, fill="both", expand=True, pady=(5, 0))
         self.update_site_list() # 初始化網址清單
+        self.refresh_user_lists() # 這行會自動觸發檢查捲軸顯示
 
     # ================= 新增：網址管理與後續動作 =================
     def update_site_list(self):
@@ -2119,6 +2393,12 @@ class App(tk.Tk):
         if not name or not url:
             messagebox.showwarning("提示", "名稱和網址都不能是空的喔！")
             return
+            
+        # 檢查防呆：如果名稱已經存在，跳出警告詢問
+        if name in saved_sites:
+            if not messagebox.askyesno("重複確認", f"網站名稱「{name}」已存在，是否要覆蓋更新網址？"):
+                return
+                
         saved_sites[name] = url
         self.save_config()
         self.update_site_list()
@@ -2235,81 +2515,48 @@ class App(tk.Tk):
             # 完全成功的情況，維持原本的提示
             messagebox.showinfo("完成", msg)
 
-    def on_tab_change(self, event):
-        selected_tab = event.widget.select()
-        tab_text = event.widget.tab(selected_tab, "text").strip()
 
-        # 切換分頁時，先解開目前的排版
-        self.frame_log.pack_forget()
-
-        # 如果點擊的是這兩頁，就動態把 Log 框放進去，並設定 expand=True 把底下的空白填滿！
-        if "自動任務" in tab_text or "撤銷投票" in tab_text:
-            target_tab = event.widget.nametowidget(selected_tab)
-            self.frame_log.pack(in_=target_tab, fill="both", expand=True, pady=(5, 0))
             
     def start_mode_1(self):
         self.save_config()
-        self.log_text.configure(state='normal')
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.configure(state='disabled')
-        threading.Thread(target=self.run_logic_mode_1, daemon=True).start()
+        target_accounts = [acc for acc in user_accounts if self.check_vars_auto.get(acc['id'], tk.BooleanVar()).get()]
+        if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個帳號！")
+        
+        self.log_text.configure(state='normal'); self.log_text.delete(1.0, tk.END); self.log_text.configure(state='disabled')
+        threading.Thread(target=self.run_logic_mode_1, args=(target_accounts,), daemon=True).start()
 
     def start_mode_2(self):
-        input_ids = self.single_id_entry.get().strip()
+        target_accounts = [acc for acc in user_accounts if self.check_vars_single.get(acc['id'], tk.BooleanVar()).get()]
+        if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個補圖帳號！")
         stocks = self.stock_list_entry.get("1.0", tk.END).strip()
-        target_id_list = []
-        if not input_ids:
-            self.save_config() 
-            target_id_list = [x for x in shareholderIDs if x]
-            if not target_id_list:
-                messagebox.showerror("錯誤", "設定裡沒有帳號，請手動輸入或去設定新增")
-                return
-        else: target_id_list = [x.strip() for x in input_ids.split(',') if x.strip()]
-        if not stocks:
-            messagebox.showerror("輸入錯誤", "請輸入股票代號")
-            return
-        self.log_text.configure(state='normal')
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.configure(state='disabled')
-        threading.Thread(target=self.run_logic_mode_2, args=(target_id_list, stocks), daemon=True).start()
+        if not stocks: return messagebox.showwarning("錯誤", "請輸入股票代號")
+        
+        self.log_text.configure(state='normal'); self.log_text.delete(1.0, tk.END); self.log_text.configure(state='disabled')
+        threading.Thread(target=self.run_logic_mode_2, args=(target_accounts, stocks), daemon=True).start()
 
     def start_mode_3(self):
-        input_ids = self.revoke_id_entry.get().strip()
+        target_accounts = [acc for acc in user_accounts if self.check_vars_revoke.get(acc['id'], tk.BooleanVar()).get()]
+        if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個撤銷帳號！")
         mode = self.revoke_mode_var.get()
         stocks_str = self.revoke_stock_list.get("1.0", tk.END).strip()
         stock_list = re.findall(r'\d+', stocks_str)
-        
-        if mode == "all" and stock_list:
-            messagebox.showerror("輸入衝突", "您選擇了「全部撤銷」，請將下方的「指定股票代號」欄位清空，或改選「指定代號撤銷」。")
-            return
-        
-        target_id_list = []
-        if not input_ids:
-            self.save_config() 
-            target_id_list = [x for x in shareholderIDs if x]
-            if not target_id_list:
-                messagebox.showerror("錯誤", "設定裡沒有帳號，請手動輸入或去設定新增")
-                return
-        else: target_id_list = [x.strip() for x in input_ids.split(',') if x.strip()]
-        
-        if mode == "specific" and not stock_list:
-            messagebox.showerror("輸入錯誤", "選擇「指定代號撤銷」時，請輸入股票代號")
-            return
+        if mode == "all" and stock_list: return messagebox.showerror("衝突", "選擇全部撤銷請清空下方代號欄位。")
+        if mode == "specific" and not stock_list: return messagebox.showerror("錯誤", "請輸入指定股票代號")
             
-        self.log_text.configure(state='normal')
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.configure(state='disabled')
-        threading.Thread(target=self.run_logic_mode_3, args=(target_id_list, mode, stock_list), daemon=True).start()
+        self.log_text.configure(state='normal'); self.log_text.delete(1.0, tk.END); self.log_text.configure(state='disabled')
+        threading.Thread(target=self.run_logic_mode_3, args=(target_accounts, mode, stock_list), daemon=True).start()
 
-    def run_logic_mode_1(self):
-        global driver, voteinfolist, shareholderIDs, session_results, user_name_map
+    def run_logic_mode_1(self, target_accounts):
+        global driver, voteinfolist, session_results, user_name_map
         session_results = {}; user_name_map = {} 
         start_time = time.time(); total_items = 0
         log_msg("=== 自動任務開始 ===")
         if not os.path.exists(base_path): os.makedirs(base_path)
         
         read_voteinfolist(voteinfolist)
-        for uid in shareholderIDs:
+        # 初始化 voteinfolist，改用 target_accounts
+        for acc in target_accounts:
+             uid = acc['id']
              if uid not in voteinfolist: voteinfolist[uid] = {}
              elif isinstance(voteinfolist[uid], list):
                  voteinfolist[uid] = {sid: 0 for sid in voteinfolist[uid]}
@@ -2322,8 +2569,14 @@ class App(tk.Tk):
             log_msg(f"瀏覽器初始啟動失敗: {e}")
             return
 
+        # 建立名稱對應表
+        for acc in target_accounts: user_name_map[acc['id']] = acc['name']
+
         try:
-            for user_id in shareholderIDs:
+            for acc in target_accounts:
+                user_id = acc['id']
+                current_login_type = acc['login_type']
+
                 if maintenance_flag: break
                 if not user_id: continue
                 
@@ -2335,7 +2588,7 @@ class App(tk.Tk):
 
                 try:
                     log_msg(f"--- 正在處理: {user_id} ---")
-                    try: autoLogin(user_id)
+                    try: autoLogin(user_id, current_login_type)
                     except SystemMaintenanceError:
                         log_msg("!!! 系統維護中，暫停任務 !!!")
                         maintenance_flag = True; break 
@@ -2396,21 +2649,19 @@ class App(tk.Tk):
         generate_session_report(start_time, end_time, total_items)
         log_msg("=== 任務全部完成 ===")
         if maintenance_flag: 
-            # 遇到系統維護也彈一下，避免被蓋住
             self.attributes('-topmost', True)
             self.update()
             self.attributes('-topmost', False)
             messagebox.showwarning("暫停", "因為系統維護，目前已終止任務！")
         else: 
-            # 觸發全新的 UI 動線
             self.after(0, self._finish_task)
 
-    def run_logic_mode_2(self, id_list, stocks_str):
-        global driver, session_results, user_name_map, login_type
+    def run_logic_mode_2(self, target_accounts, stocks_str):
+        global driver, session_results, user_name_map
         session_results = {}; user_name_map = {} 
         start_time = time.time(); total_items = 0
         
-        log_msg(f"=== 開始補圖，共 {len(id_list)} 個帳號 ===")
+        log_msg(f"=== 開始補圖，共 {len(target_accounts)} 個帳號 ===")
         stock_list = re.findall(r'\d+', stocks_str)
         if not stock_list:
             log_msg("沒有有效的股票代號")
@@ -2422,8 +2673,13 @@ class App(tk.Tk):
         except: 
             log_msg("瀏覽器啟動失敗"); return
 
+        for acc in target_accounts: user_name_map[acc['id']] = acc['name']
+
         try:
-            for target_id in id_list:
+            for acc in target_accounts:
+                target_id = acc['id']
+                current_login_type = acc['login_type']
+
                 if maintenance_flag: break
                 try: driver.current_url
                 except:
@@ -2432,9 +2688,9 @@ class App(tk.Tk):
                     except: continue
 
                 try:
-                    log_msg(f"--- 補圖帳號: {target_id} (使用: {login_type}) ---")
+                    log_msg(f"--- 補圖帳號: {target_id} (使用: {current_login_type}) ---")
                     try: 
-                        autoLogin(target_id)
+                        autoLogin(target_id, current_login_type)
                     except SystemMaintenanceError:
                         log_msg("系統維護中，停止任務")
                         maintenance_flag = True; break
@@ -2462,17 +2718,14 @@ class App(tk.Tk):
         end_time = time.time()
         generate_session_report(start_time, end_time, total_items)
         log_msg("=== 補圖任務結束 ===")
-        
-        # 觸發全新的 UI 動線
         self.after(0, self._finish_task)
-        #messagebox.showinfo("完成", "截圖任務完畢")
 
-    def run_logic_mode_3(self, id_list, mode, stock_list):
-        global driver, session_results, user_name_map, login_type
+    def run_logic_mode_3(self, target_accounts, mode, stock_list):
+        global driver, session_results, user_name_map
         session_results = {}; user_name_map = {} 
-        start_time = time.time() # <--- 新增：開始計時
+        start_time = time.time() 
         
-        log_msg(f"=== 開始撤銷任務 ({'全部' if mode=='all' else '指定'})，共 {len(id_list)} 個帳號 ===")
+        log_msg(f"=== 開始撤銷任務 ({'全部' if mode=='all' else '指定'})，共 {len(target_accounts)} 個帳號 ===")
         
         maintenance_flag = False
         try:
@@ -2480,8 +2733,13 @@ class App(tk.Tk):
         except: 
             log_msg("瀏覽器啟動失敗"); return
 
+        for acc in target_accounts: user_name_map[acc['id']] = acc['name']
+
         try:
-            for target_id in id_list:
+            for acc in target_accounts:
+                target_id = acc['id']
+                current_login_type = acc['login_type']
+
                 if maintenance_flag: break
                 try: driver.current_url
                 except:
@@ -2490,9 +2748,9 @@ class App(tk.Tk):
                     except: continue
 
                 try:
-                    log_msg(f"--- 撤銷帳號: {target_id} (使用: {login_type}) ---")
+                    log_msg(f"--- 撤銷帳號: {target_id} (使用: {current_login_type}) ---")
                     try: 
-                        autoLogin(target_id)
+                        autoLogin(target_id, current_login_type)
                     except SystemMaintenanceError:
                         log_msg("系統維護中，停止任務")
                         maintenance_flag = True; break
@@ -2512,15 +2770,12 @@ class App(tk.Tk):
             force_quit_driver(driver)
             driver = None
 
-        end_time = time.time() # <--- 新增：結束計時
-        total_items = sum(len(res.get('success', [])) for res in session_results.values()) # <--- 計算總撤銷數
+        end_time = time.time() 
+        total_items = sum(len(res.get('success', [])) for res in session_results.values()) 
         
-        # --- 新增：產生報告 ---
         generate_session_report(start_time, end_time, total_items)
         
         log_msg("=== 撤銷任務結束 ===")
-        
-        # 讓撤銷完畢的彈窗也維持在最上層，不會被蓋住
         self.attributes('-topmost', True)
         self.update()
         self.attributes('-topmost', False)
