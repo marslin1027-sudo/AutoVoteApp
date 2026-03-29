@@ -2328,7 +2328,7 @@ class App(tk.Tk):
         frame_url = ttk.Frame(tab5)
         frame_url.pack(fill="both", expand=True, padx=10, pady=12)
 
-        manage_frame = ttk.LabelFrame(frame_url, text=" 📝 新增完成後開啟的網站 ")
+        manage_frame = ttk.LabelFrame(frame_url, text=" 📝 新增完成後開啟的網站(EX：零股寶） ")
         manage_frame.pack(fill="x", pady=5, ipady=10)
 
         grid_url = ttk.Frame(manage_frame)
