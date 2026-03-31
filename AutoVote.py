@@ -51,6 +51,7 @@ base_path = "./screenshots/"
 user_accounts = [] # <--- 新增：取代 shareholderIDs，儲存格式為 [{'name': '...', 'id': '...', 'login_type': '...'}]
 saved_sites = {} # <--- 新增：用來儲存自訂網址的字典
 browser_choice = "Edge" # <--- 新增：預設瀏覽器
+name_source_mode = 1
 
 # 新增：速率分離與視窗記憶
 vote_speed = 2.0  
@@ -787,7 +788,7 @@ def process_single_revoke():
         log_msg("等待手動介入選擇憑證... (請在跳出的視窗中操作)")
         log_msg("程式正在背景偵測彈出的視窗，並會自動幫您點擊最後的確認按鈕...")
         
-        timeout_wait = 300 
+        timeout_wait = 100 
         start_wait = time.time()
         
         initial_windows = driver.window_handles
@@ -827,7 +828,7 @@ def process_single_revoke():
                 if final_msg_btn.is_displayed():
                     final_msg_btn.click()
                     log_msg("已自動點擊憑證簽署後的最後確認按鈕 (msgDialog)！")
-                    time.sleep(1) 
+                    time.sleep(base_wait)
             except: pass
 
             try:
@@ -835,7 +836,7 @@ def process_single_revoke():
                 alert_msg = final_alert.text
                 final_alert.accept()
                 log_msg(f"已自動同意憑證簽署後的警告視窗: [{alert_msg}]")
-                time.sleep(1)
+                time.sleep(base_wait)
             except: pass
 
             try:
@@ -844,18 +845,18 @@ def process_single_revoke():
                     if f_btn.is_displayed():
                         f_btn.click()
                         log_msg("已自動點擊憑證簽署後的最後確認按鈕 (網頁元素)！")
-                        time.sleep(1)
+                        time.sleep(base_wait)
                         break
             except: pass
 
             try:
                 if "tc_estock_welshas" in driver.current_url and driver.find_elements(By.NAME, 'qryStockId'):
                     log_msg("偵測到已返回列表頁面，代表撤銷流程完整結束，接續下一筆。")
-                    time.sleep(1) 
+                    time.sleep(base_wait)
                     return True
             except: pass
             
-            time.sleep(1)
+            time.sleep(base_wait)
             
         log_msg("等待手動操作與最後確認超時！")
         return False
@@ -866,29 +867,74 @@ def process_single_revoke():
 
 def auto_revoke(user_id, mode, stock_list):
     global driver
-    base_wait = 0.5
+    base_wait = 1 * vote_speed
     try:
         if "tc_estock_welshas" not in driver.current_url:
             driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
         
         for _ in range(50): 
             if driver.find_elements(By.NAME,'qryStockId'): break
-            time.sleep(0.1)
+            time.sleep(base_wait)
 
         if mode == "specific":
             for stock_id in stock_list:
                 log_msg(f"正在搜尋並嘗試撤銷代號: {stock_id}")
+                
+                # --- 【新增：處理留 Email 或抽獎等干擾視窗】 ---
+                pass_active_form() # 呼叫原有的抽獎處理
+                for _ in range(2):
+                    try:
+                        # 關閉各種可能的彈窗與略過按鈕
+                        skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
+                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click()
+                        
+                        msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click()
+                        
+                        robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click()
+                    except: pass
+                    time.sleep(base_wait)
+                # ----------------------------------------------
+                
                 driver.find_element(By.NAME,'qryStockId').clear()
                 driver.find_element(By.NAME,'qryStockId').send_keys(stock_id)
-                driver.find_element(By.CSS_SELECTOR,'a[onclick="qryByStockId();"]').click()
-                time.sleep(1)
+                
+                # --- 【強化：雙重保險點擊查詢】 ---
+                search_btn = driver.find_element(By.CSS_SELECTOR,'a[onclick="qryByStockId();"]')
+                try:
+                    search_btn.click() # 一般點擊
+                except:
+                    # 如果還是被看不見的元素擋住，改用 JS 強制觸發，無視遮罩
+                    driver.execute_script("arguments[0].click();", search_btn)
+                # ----------------------------------
+                
+                time.sleep(base_wait)
                 
                 try:
                     rows = driver.find_elements(By.TAG_NAME,'tr')
                     if len(rows) > 1 and str(stock_id) in rows[1].text:
+                        
+                        # --- 【新增防護：準備點擊撤銷前，再清一次突然跳出來的遮罩】 ---
+                        try:
+                            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                            if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click()
+                            
+                            robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+                            if robot_close and robot_close[0].is_displayed(): robot_close[0].click()
+                            time.sleep(base_wait)
+                        except: pass
+                        # --------------------------------------------------------
+
                         revoke_links = rows[1].find_elements(By.XPATH, ".//a[contains(text(),'撤銷')]")
                         if revoke_links:
-                            revoke_links[0].click()
+                            # --- 【強化：加入 JS 強制點擊，就算被擋住硬點】 ---
+                            try:
+                                revoke_links[0].click()
+                            except:
+                                driver.execute_script("arguments[0].click();", revoke_links[0])
+                            # -----------------------------------------------
+                            
                             process_single_revoke()
                         else:
                             log_msg(f"[{stock_id}] 找不到撤銷按鈕，可能尚未投票或無法撤銷。")
@@ -899,12 +945,29 @@ def auto_revoke(user_id, mode, stock_list):
                 
                 if "tc_estock_welshas" not in driver.current_url:
                      driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
-                     time.sleep(1)
+                     time.sleep(base_wait)
 
         elif mode == "all":
             log_msg("開始掃描並撤銷所有已投票項目...")
             while True:
                 found_revoke = False
+                
+                # --- 【新增強化：掃描前先處理留 Email 或抽獎等干擾視窗】 ---
+                pass_active_form()
+                for _ in range(2):
+                    try:
+                        skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
+                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click()
+                        
+                        msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click()
+                        
+                        robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
+                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click()
+                    except: pass
+                    time.sleep(base_wait)
+                # ---------------------------------------------------------
+
                 try:
                     trs = driver.find_elements(By.TAG_NAME,'tr')
                     if len(trs) > 1:
@@ -915,7 +978,14 @@ def auto_revoke(user_id, mode, stock_list):
                                     row_text = row.text.split(" ")
                                     t_id = row_text[0]
                                     log_msg(f"發現可撤銷項目: {t_id}")
-                                    revoke_links[0].click()
+                                    
+                                    # --- 【新增強化：加入 JS 強制點擊，無視遮罩硬點】 ---
+                                    try:
+                                        revoke_links[0].click()
+                                    except:
+                                        driver.execute_script("arguments[0].click();", revoke_links[0])
+                                    # -------------------------------------------------
+                                    
                                     found_revoke = True
                                     process_single_revoke()
                                     break 
@@ -1215,7 +1285,7 @@ def autovote(user_ID):
     except Exception as e:
         log_msg(f"Autovote 執行失敗: {e}"); return 1
 
-def screenshot(user_id, info):
+def screenshot(user_id, info, override_name=None):
     global base_path, screenshot_mode, driver, user_name_map, shot_speed # <--- 修正：將 time_speed 改為 shot_speed
     try:
         driver.execute_script("""
@@ -1241,7 +1311,7 @@ def screenshot(user_id, info):
         
         cropped_img = img.crop((left, top, min(img.width, right), min(img.height, bottom)))
         
-        display_name = user_name_map.get(user_id, str(user_id))
+        display_name = override_name if override_name else user_name_map.get(user_id, str(user_id))
         stock_name = info[1].replace('*','')
         stock_name = clean_filename(stock_name)
         if len(stock_name) > 20: stock_name = stock_name[:20]
@@ -1270,7 +1340,7 @@ def screenshot(user_id, info):
 
 def auto_screenshot(user_id, stock_id):
     # 此處已刪除重複出現的函式，並確保只保留這一個正確的修正版
-    global driver, session_results, user_name_map, shot_speed
+    global driver, session_results, user_name_map, shot_speed, name_source_mode
     try: driver.implicitly_wait(0.01)
     except: pass
     
@@ -1297,15 +1367,23 @@ def auto_screenshot(user_id, stock_id):
             
         driver.find_element(By.NAME,'qryStockId').clear()
         driver.find_element(By.NAME,'qryStockId').send_keys(stock_id)
-        driver.find_element(By.CSS_SELECTOR,'a[onclick="qryByStockId();"]').click()
-        
+       # --- 【強化：單筆補圖查詢加入強力點擊】 ---
+        search_btn = driver.find_element(By.CSS_SELECTOR,'a[onclick="qryByStockId();"]')
+        try:
+            search_btn.click() # 先嘗試一般點擊
+        except:
+            # 若被隱形遮罩或彈窗擋住，直接用 JS 無視遮罩硬點
+            driver.execute_script("arguments[0].click();", search_btn)
+        # ----------------------------------------
         found_result = False
+        row_status_text = "" # 新增變數來儲存該列的文字
         for _ in range(100): 
             time.sleep(base_wait)
             try:
                 rows = driver.find_elements(By.TAG_NAME,'tr')
                 if len(rows) > 1 and str(stock_id) in rows[1].text:
                     found_result = True
+                    row_status_text = rows[1].text # 抓取整列的文字內容
                     break
             except: pass
             
@@ -1314,6 +1392,12 @@ def auto_screenshot(user_id, stock_id):
             session_results[user_id]['fail_screenshot'].append(stock_id)
             return 2
 
+        # --- 【新增：檢查是否為未投票】 ---
+        if "未投票" in row_status_text:
+            log_msg(f"[{stock_id}] 狀態為「未投票」，跳過截圖任務。")
+            session_results[user_id]['fail_screenshot'].append(f"{stock_id} (未投票)")
+            return 2
+        # --------------------------------
         voteinfo = []
         try:
             row = driver.find_elements(By.TAG_NAME,'tr')[1]
@@ -1327,9 +1411,12 @@ def auto_screenshot(user_id, stock_id):
                     if driver.find_elements(By.CSS_SELECTOR, 'button[onclick*="back"], input[onclick*="back"]'):
                         page_loaded = True
                         break
-                    if driver.find_elements(By.ID, "msgDialog_okBtn") and driver.find_element(By.ID, "msgDialog_okBtn").is_displayed():
-                        page_loaded = True
-                        break
+                    
+                    # 【修正處 1】不要把對話框當作載入完成，而是點擊關閉它
+                    msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                    if msg_btns and msg_btns[0].is_displayed():
+                        msg_btns[0].click()
+                        time.sleep(base_wait)
                 except: pass
 
                 try:
@@ -1348,9 +1435,13 @@ def auto_screenshot(user_id, stock_id):
                             if driver.find_elements(By.CSS_SELECTOR, 'button[onclick*="back"], input[onclick*="back"]'):
                                 page_loaded = True
                                 break
-                            if driver.find_elements(By.ID, "msgDialog_okBtn") and driver.find_element(By.ID, "msgDialog_okBtn").is_displayed():
-                                page_loaded = True
-                                break
+                            
+                            # 【修正處 2】點擊查詢後的等待過程中，如果跳出抽獎等對話框，一樣點擊關閉繼續等，不要中斷
+                            msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                            if msg_btns and msg_btns[0].is_displayed():
+                                try: msg_btns[0].click()
+                                except: pass
+                                
                             time.sleep(base_wait)
                         if page_loaded: break 
                     else:
@@ -1379,7 +1470,60 @@ def auto_screenshot(user_id, stock_id):
             try: driver.execute_script("document.body.style.zoom = '100%'")
             except: pass
 
-            if user_id in user_name_map:
+            # 預設使用程式自訂的名稱
+            actual_display_name = user_name_map.get(user_id, str(user_id))
+
+            if name_source_mode == 2: # 模式 2：精準抓取網頁實際戶名 (針對股東e票通表格結構)
+                detected_name = ""
+                start_search = time.time()
+                while time.time() - start_search < 3.0:
+                    try:
+                        btn = driver.find_element(By.ID, "msgDialog_okBtn")
+                        if btn.is_displayed(): btn.click()
+                    except: pass
+                    try: driver.execute_script("document.body.style.zoom = '100%'")
+                    except: pass
+                    
+                    try:
+                        # 【精準策略 1】針對現有 HTML 結構：找 th 標籤包含 '戶名'，然後取它相鄰的 td
+                        try:
+                            name_td = driver.find_element(By.XPATH, "//th[contains(text(), '戶名')]/following-sibling::td")
+                            if name_td and name_td.text.strip():
+                                detected_name = name_td.text.strip()
+                        except: pass
+
+                        # 【備用策略 2】如果找不到 th，改找整列 tr 包含 '戶名'，並取出裡面的 td
+                        if not detected_name:
+                            try:
+                                trs = driver.find_elements(By.TAG_NAME, "tr")
+                                for tr in trs:
+                                    if "戶名" in tr.text:
+                                        tds = tr.find_elements(By.TAG_NAME, "td")
+                                        if tds:
+                                            # 名字通常在該列的最後一個格子裡
+                                            detected_name = tds[-1].text.strip()
+                                            break
+                            except: pass
+
+                        # 【備用策略 3】原有的正則暴力法 (終極保底)
+                        if not detected_name:
+                            body_text = driver.find_element(By.TAG_NAME, "body").text
+                            import re
+                            match = re.search(r'戶名\s*[:：]?\s*([^\s　]+)', body_text)
+                            if match:
+                                potential_name = match.group(1)
+                                if 2 <= len(potential_name) <= 20:
+                                    detected_name = potential_name
+
+                        if detected_name:
+                            clean_name = clean_filename(detected_name)
+                            actual_display_name = clean_name
+                            log_msg(f"成功抓到實際戶名: {clean_name}")
+                            break
+                    except: pass
+                    time.sleep(base_wait)
+            else:
+                # 模式 1：使用自訂名稱，只需負責把可能出現的系統提示框關掉
                 for _ in range(10):
                     try:
                         btn = driver.find_element(By.ID, "msgDialog_okBtn")
@@ -1388,46 +1532,9 @@ def auto_screenshot(user_id, stock_id):
                             break 
                     except: pass
                     time.sleep(base_wait)
-            else:
-                detected_name = ""
-                start_search = time.time()
-                while time.time() - start_search < 2.0:
-                    try:
-                        btn = driver.find_element(By.ID, "msgDialog_okBtn")
-                        if btn.is_displayed(): btn.click()
-                    except: pass
-                    try: driver.execute_script("document.body.style.zoom = '100%'")
-                    except: pass
-                    try:
-                        xpath_targets = driver.find_elements(By.XPATH, "//*[contains(text(),'戶名')]")
-                        for el in xpath_targets:
-                            if not el.is_displayed(): continue
-                            raw_text = el.text.strip()
-                            if (":" in raw_text or "：" in raw_text) and len(raw_text) > 4:
-                                detected_name = raw_text.replace("戶名", "").replace(":", "").replace("：", "").strip()
-                                break
-                            try:
-                                parent = el.find_element(By.XPATH, "./..")
-                                if parent.tag_name.lower() in ['tr', 'td', 'div']:
-                                    full_text = parent.text.replace("\n", " ")
-                                    if "戶名" in full_text:
-                                        parts_t = full_text.split("戶名")
-                                        if len(parts_t) > 1:
-                                            potential = parts_t[1].strip(":： ").split(" ")[0]
-                                            if len(potential) > 1:
-                                                detected_name = potential
-                                                break
-                            except: pass
-                        if detected_name:
-                            clean_name = clean_filename(detected_name)
-                            user_name_map[user_id] = clean_name
-                            log_msg(f"抓到戶名: {clean_name}")
-                            break
-                    except: pass
-                    time.sleep(base_wait)
 
             voteinfo.append("unknown") 
-            res = screenshot(user_id, voteinfo)
+            res = screenshot(user_id, voteinfo, override_name=actual_display_name) # 將算好的名稱傳過去
             if res != 0: session_results[user_id]['fail_screenshot'].append(report_text)
             else: session_results[user_id]['success_screenshot'].append(report_text)
             
@@ -1735,7 +1842,7 @@ class App(tk.Tk):
             close_btn.pack(pady=(0, 5), ipadx=20)
 
     def load_config(self):
-        global user_accounts, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site
+        global user_accounts, vote_speed, shot_speed, screenshot_mode, manual_vote, default_vote, accept_list, opposite_list, abstain_list, disclaimer_agreed, main_window_geom, disc_window_geom, join_draw, ignore_update_until, saved_sites, browser_choice, last_selected_site, name_source_mode, pane_sash_pos
         conf_path = os.path.join(CONFIG_DIR, 'program_setting.conf')
         vote_conf_path = os.path.join(CONFIG_DIR, 'vote_setting.conf')
         
@@ -1747,6 +1854,7 @@ class App(tk.Tk):
                     content = f.read()
                     for line in content.split('\n'):
                         if "screenshot_mode:::" in line: screenshot_mode = int(line.split(":::")[1])
+                        if "name_source_mode:::" in line: name_source_mode = int(line.split(":::")[1])
                         if "vote_speed:::" in line: vote_speed = float(line.split(":::")[1])
                         if "shot_speed:::" in line: shot_speed = float(line.split(":::")[1])
                         if "login_type:::" in line: login_type = line.split(":::")[1]
@@ -1791,6 +1899,7 @@ class App(tk.Tk):
         self.vote_speed_var = tk.StringVar(value=str(vote_speed))
         self.shot_speed_var = tk.StringVar(value=str(shot_speed))
         self.screenshot_mode_var = tk.IntVar(value=screenshot_mode)
+        self.name_source_mode_var = tk.IntVar(value=name_source_mode)
         self.join_draw_var = tk.BooleanVar(value=join_draw) 
         self.revoke_mode_var = tk.StringVar(value="specific")
         self.browser_choice_var = tk.StringVar(value=browser_choice)
@@ -1813,6 +1922,7 @@ class App(tk.Tk):
                 messagebox.showerror("設定錯誤", "速度倍率請輸入有效的數字")
                 return
             screenshot_mode = self.screenshot_mode_var.get()
+            name_source_mode = self.name_source_mode_var.get()
             join_draw = self.join_draw_var.get() 
             browser_choice = self.browser_choice_var.get() 
             
@@ -1824,6 +1934,7 @@ class App(tk.Tk):
             
             with open(conf_path, 'w', encoding='utf8') as f:
                 f.write(f"screenshot_mode:::{screenshot_mode}\n")
+                f.write(f"name_source_mode:::{name_source_mode}\n")
                 f.write(f"vote_speed:::{vote_speed}\n")
                 f.write(f"shot_speed:::{shot_speed}\n")
                 f.write(f"login_type:::{login_type}\n")
@@ -2285,7 +2396,14 @@ class App(tk.Tk):
         file_frame.pack(fill="x", pady=2)
         ttk.Label(file_frame, text="截圖存檔方式:").pack(anchor="w", pady=(0,2))
         ttk.Radiobutton(file_frame, text="各帳號獨立資料夾", variable=self.screenshot_mode_var, value=1).pack(side="left", padx=(10, 5))
-        ttk.Radiobutton(file_frame, text="放一起(檔名含戶名)", variable=self.screenshot_mode_var, value=2).pack(side="left")
+        ttk.Radiobutton(file_frame, text="放一起(檔名含使用者名稱)", variable=self.screenshot_mode_var, value=2).pack(side="left")
+        # --- 新增：名稱來源設定 ---
+        name_frame = ttk.Frame(frame_setting)
+        name_frame.pack(fill="x", pady=2)
+        ttk.Label(name_frame, text="使用者名稱來源:").pack(anchor="w", pady=(0,2))
+        ttk.Radiobutton(name_frame, text="程式自訂名稱", variable=self.name_source_mode_var, value=1).pack(side="left", padx=(10, 5))
+        ttk.Radiobutton(name_frame, text="網頁實際戶名", variable=self.name_source_mode_var, value=2).pack(side="left")
+        # -------------------------
 
         draw_frame = ttk.Frame(frame_setting)
         draw_frame.pack(fill="x", pady=5)
@@ -2526,6 +2644,7 @@ class App(tk.Tk):
         threading.Thread(target=self.run_logic_mode_1, args=(target_accounts,), daemon=True).start()
 
     def start_mode_2(self):
+        self.save_config()  
         target_accounts = [acc for acc in user_accounts if self.check_vars_single.get(acc['id'], tk.BooleanVar()).get()]
         if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個補圖帳號！")
         stocks = self.stock_list_entry.get("1.0", tk.END).strip()
@@ -2535,6 +2654,7 @@ class App(tk.Tk):
         threading.Thread(target=self.run_logic_mode_2, args=(target_accounts, stocks), daemon=True).start()
 
     def start_mode_3(self):
+        self.save_config()
         target_accounts = [acc for acc in user_accounts if self.check_vars_revoke.get(acc['id'], tk.BooleanVar()).get()]
         if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個撤銷帳號！")
         mode = self.revoke_mode_var.get()
