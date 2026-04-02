@@ -22,7 +22,7 @@ import upload_5205  # <--- 新增這行，把上傳模組匯入
 from __version__ import CURRENT_VERSION
 
 
-VERSION_INFO_URL = "https://raw.githubusercontent.com/marslin1027-sudo/AutoVoteApp/refs/heads/main/version.json"
+VERSION_INFO_URL = "https://raw.githubusercontent.com/PyRoutine/AutoVoteApp/refs/heads/main/version.json"
 from PIL import Image
 
 # 強化加密所需模組
