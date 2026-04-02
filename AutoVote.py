@@ -18,6 +18,7 @@ import json
 import requests
 import subprocess
 import urllib.parse
+import upload_5205  # <--- 新增這行，把上傳模組匯入
 from __version__ import CURRENT_VERSION
 
 
@@ -437,7 +438,9 @@ def get_driver():
     edge_options.add_argument("--remote-allow-origins=*")
     prefs = {
         "profile.default_content_setting_values.notifications": 2,
-        "profile.managed_default_content_settings.insecure_private_network_requests": 1
+        "profile.managed_default_content_settings.insecure_private_network_requests": 1, # 加上逗號
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False
     }
     edge_options.add_experimental_option("prefs", prefs)
     try:
@@ -1591,7 +1594,7 @@ def generate_session_report(start_t=None, end_t=None, count=0):
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
-        file_name = f"自動化任務報告_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        file_name = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_自動化任務報告.txt"
         report_name = os.path.join(log_dir, file_name)
         
         def chunks(lst, n):
@@ -1866,9 +1869,17 @@ class App(tk.Tk):
                         if "pane_sash_pos:::" in line: pane_sash_pos = int(line.split(":::")[1]) # <--- 新增讀取
                         if "browser_choice:::" in line: browser_choice = line.split(":::")[1].strip()
                         if "last_selected_site:::" in line: last_selected_site = line.split(":::")[1].strip() # <--- 讀取上次記憶網頁
-                        if "saved_sites:::" in line: 
+                        # --- 修改段落 1：支援讀取加密後的網站/帳密清單 ---
+                        if "saved_sites_enc:::" in line: 
+                            try:
+                                dec = decrypt_data(line.split(":::")[1])
+                                if dec: saved_sites = json.loads(dec)
+                            except: pass
+                        elif "saved_sites:::" in line: 
+                            # 舊版未加密相容性處理
                             try: saved_sites = json.loads(line.split(":::")[1])
                             except: saved_sites = {}
+                        # ----------------------------------------------------
                         if "user_accounts:::" in line:
                             try:
                                 dec = decrypt_data(line.split(":::")[1])
@@ -1946,7 +1957,10 @@ class App(tk.Tk):
                 f.write(f"pane_sash_pos:::{pane_sash_pos}\n") # <--- 新增寫入
                 f.write(f"browser_choice:::{browser_choice}\n") 
                 f.write(f"last_selected_site:::{last_selected_site}\n") # <--- 寫入記憶
-                f.write(f"saved_sites:::{json.dumps(saved_sites, ensure_ascii=False)}\n")
+                # --- 修改段落 2：將網站與 5205 帳密整包加密寫入 ---
+                encrypted_sites = encrypt_data(json.dumps(saved_sites, ensure_ascii=False))
+                f.write(f"saved_sites_enc:::{encrypted_sites}\n")
+                # --------------------------------------------------
                 
                 # 改為加密儲存 JSON 格式的 user_accounts
                 encrypted_acc = encrypt_data(json.dumps(user_accounts, ensure_ascii=False))
@@ -2441,7 +2455,7 @@ class App(tk.Tk):
         btn_disclaimer.pack(pady=(0, 10), ipadx=10)
 
         # ==========================================
-        # === Tab 5: 網址管理 ===
+        # === Tab 5: 網址管理 (含隱藏版 5205 功能) ===
         # ==========================================
         frame_url = ttk.Frame(tab5)
         frame_url.pack(fill="both", expand=True, padx=10, pady=12)
@@ -2453,12 +2467,24 @@ class App(tk.Tk):
         grid_url.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(grid_url, text="自訂名稱:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.entry_name = ttk.Entry(grid_url)
+        
+        # 綁定變數以監聽輸入內容 (隱藏版功能核心)
+        self.name_var = tk.StringVar()
+        self.name_var.trace("w", self.on_manage_name_change)
+        self.entry_name = ttk.Entry(grid_url, textvariable=self.name_var)
         self.entry_name.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
 
-        ttk.Label(grid_url, text="網址 (URL):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        # 網址輸入框 (預設顯示)
+        self.label_url = ttk.Label(grid_url, text="網址 (URL):")
+        self.label_url.grid(row=1, column=0, padx=10, pady=5, sticky="w")
         self.entry_url = ttk.Entry(grid_url)
         self.entry_url.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        # 5205 隱藏帳號密碼框 (預設隱藏)
+        self.label_5205_email = ttk.Label(grid_url, text="5205 登入帳號:")
+        self.entry_5205_email = ttk.Entry(grid_url)
+        self.label_5205_pass = ttk.Label(grid_url, text="5205 登入密碼:")
+        self.entry_5205_pass = ttk.Entry(grid_url, show="*")
 
         btn_frame = ttk.Frame(manage_frame)
         btn_frame.pack(pady=10)
@@ -2477,7 +2503,7 @@ class App(tk.Tk):
         self.manage_site_combo.pack(side="left", padx=5)
         ttk.Button(del_inner, text="刪除", command=self.delete_site, style='Red.TButton').pack(side="left", padx=5)
 
-        ttk.Label(frame_url, text="💡 設定好的網址可以在「自動任務」分頁底下的藍色區塊挑選！", foreground="#666", wraplength=320).pack(pady=10)
+        ttk.Label(frame_url, text="💡 設定好的網址可以在「自動任務」分頁底下的區塊挑選要開啟的網站！", foreground="#666", wraplength=320,justify="center").pack(pady=10)
 
         # === 初始化排版魔法 ===
         self.update_site_list() # 初始化網址清單
@@ -2505,29 +2531,83 @@ class App(tk.Tk):
         else:
             self.manage_selected_site.set("")
 
-    def add_site(self):
-        name = self.entry_name.get().strip()
-        url = self.entry_url.get().strip()
-        if not name or not url:
-            messagebox.showwarning("提示", "名稱和網址都不能是空的喔！")
-            return
+    # === 新增此函數以修正錯誤 ===
+    def on_manage_name_change(self, *args):
+        """當網址管理名稱輸入 '5205' 時，顯示專用輸入框"""
+        name = self.name_var.get().strip()
+        
+        if name == "5205":
+            # 顯示一般網址欄位 (讓使用者可以選擇只填網址)
+            self.label_url.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+            self.entry_url.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+            # 顯示 5205 專用帳密欄位
+            self.label_5205_email.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+            self.entry_5205_email.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+            self.label_5205_pass.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+            self.entry_5205_pass.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+        else:
+            # 顯示一般網址欄位
+            self.label_url.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+            self.entry_url.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+            # 隱藏 5205 專用帳密欄位
+            self.label_5205_email.grid_remove()
+            self.entry_5205_email.grid_remove()
+            self.label_5205_pass.grid_remove()
+            self.entry_5205_pass.grid_remove()
             
-        # 檢查防呆：如果名稱已經存在，跳出警告詢問
-        if name in saved_sites:
-            if not messagebox.askyesno("重複確認", f"網站名稱「{name}」已存在，是否要覆蓋更新網址？"):
+    def add_site(self):
+        name = self.name_var.get().strip()
+        url = self.entry_url.get().strip()
+        
+        if name == "5205":
+            email = self.entry_5205_email.get().strip()
+            password = self.entry_5205_pass.get().strip()
+            
+            has_url = bool(url)
+            has_account = bool(email or password)
+            
+            # --- 簡單防呆機制 ---
+            # 防呆 1：什麼都沒填
+            if not has_url and not has_account:
+                messagebox.showwarning("提示", "請填寫「網址」或「帳號+密碼」其中一組！")
                 return
                 
-        saved_sites[name] = url
+            # 防呆 2：網址跟帳密都填了 (互斥)
+            if has_url and has_account:
+                messagebox.showwarning("防呆提示", "【網址】與【帳密】請擇一填寫！\n\n👉 純開網頁：只需填網址\n👉 自動上傳：只需填帳號+密碼 (網址請留空)")
+                return
+                
+            # 防呆 3：帳密只填了一半
+            if not has_url and (not email or not password):
+                messagebox.showwarning("提示", "要使用自動上傳的話，5205 的帳號和密碼必須完整填寫喔！")
+                return
+            # --------------------
+
+            if name in saved_sites and not messagebox.askyesno("重複確認", f"網站名稱「{name}」已存在，是否要覆蓋更新設定？"):
+                return
+            # 存入字典格式
+            saved_sites[name] = {"type": "5205", "url": url, "email": email, "password": password}
+        else:
+            if not name or not url:
+                messagebox.showwarning("提示", "名稱和網址都不能是空的喔！")
+                return
+            if name in saved_sites and not messagebox.askyesno("重複確認", f"網站名稱「{name}」已存在，是否要覆蓋更新網址？"):
+                return
+            saved_sites[name] = url
+            
         self.save_config()
         self.update_site_list()
         
-        # 新增完自動切換
         self.selected_site.set(name) 
         self.manage_selected_site.set(name)
         
         self.entry_name.delete(0, tk.END)
         self.entry_url.delete(0, tk.END)
-        log_msg(f"✅ 已儲存網站: {name}")
+        self.entry_5205_email.delete(0, tk.END)
+        self.entry_5205_pass.delete(0, tk.END)
+        
+        log_msg(f"✅ 已加密儲存網站/服務: {name}")
+        
 
     def delete_site(self):
         target = self.manage_selected_site.get()
@@ -2541,34 +2621,66 @@ class App(tk.Tk):
                 self.update_site_list()
                 log_msg(f"🗑️ 已刪除網站: {target}")
 
-    # ================= 新增：網址管理與智慧彈跳控制 =================
     def _finish_task(self):
-        # 判斷本次是否有成功截圖的項目
+        # 1. 取得本次任務統計
         total_screenshots = sum(len(res.get('success_screenshot', [])) for res in session_results.values())
         has_shots = total_screenshots > 0
+        
+        # 2. 獲取介面上的選擇
+        target_name = self.selected_site.get() 
+        browser = self.browser_choice_var.get() 
 
         if has_shots:
-            # 1. 跑完報告後先開啟網頁
-            target_name = self.selected_site.get()
-            browser = self.browser_choice_var.get()
+            # --- 關鍵路徑 A：如果是 5205 ---
+            if target_name == "5205":
+                site_data = saved_sites.get("5205", {})
+                user_email = site_data.get("email", "") if isinstance(site_data, dict) else ""
+                user_pass = site_data.get("password", "") if isinstance(site_data, dict) else ""
+
+                if user_email and user_pass:
+                    def run_upload_script():
+                        try:
+                            # 1. 一樣設定環境變數，讓 upload_5205 可以讀取
+                            os.environ["UPLOAD_5205_EMAIL"] = user_email
+                            os.environ["UPLOAD_5205_PASS"] = user_pass
+                            os.environ["UPLOAD_5205_BROWSER"] = browser
+                            
+                            log_msg("🚀 正在啟動 5205 自動上傳，請稍候...")
+
+                            # 2. 直接呼叫它的 main()！(它裡面的 print 會自動出現在 GUI 上)
+                            upload_5205.main()
+                            
+                            # 3. 執行完畢後的動作
+                            log_msg("✅ 5205 上傳任務已完全結束。")
+                            self.after(500, self._open_folder_and_notify) 
+                            
+                        except Exception as e:
+                            log_msg(f"❌ 執行上傳時發生錯誤: {e}")
+                    
+                    # 丟到背景執行緒跑，UI 就不會卡住
+                    threading.Thread(target=run_upload_script, daemon=True).start()
+                else:
+                    log_msg("⚠️ 5205 未設定帳密，直接跳過。")
+                    self.after(500, self._open_folder_and_notify)
+
+            # --- 關鍵路徑 B：如果是其他網頁或不開啟 ---
+            else:
+                if target_name != "【不開啟任何網頁】" and target_name:
+                    url_data = saved_sites.get(target_name, "")
+                    url = url_data if isinstance(url_data, str) else url_data.get("url", "")
+                    if url:
+                        try:
+                            if browser == "Edge": subprocess.Popen(f'start msedge "{url}"', shell=True)
+                            elif browser == "Chrome": subprocess.Popen(f'start chrome "{url}"', shell=True)
+                        except: pass
+                
+                # 一般模式直接跳提醒
+                self.after(1000, self._open_folder_and_notify)
             
-            if target_name != "【不開啟任何網頁】" and target_name:
-                url = saved_sites.get(target_name, "")
-                if url:
-                    log_msg(f"準備使用 {browser} 開啟設定網頁: {target_name}")
-                    try:
-                        if browser == "Edge": subprocess.Popen(f'start msedge "{url}"', shell=True)
-                        elif browser == "Chrome": subprocess.Popen(f'start chrome "{url}"', shell=True)
-                    except Exception as e:
-                        log_msg(f"開啟瀏覽器時發生錯誤: {e}")
-
-            # 2. 開完網頁後，間隔 1 秒 (1000毫秒) 再開啟資料夾
-            self.after(1000, self._open_folder_and_notify)
         else:
-            # 如果沒做任何截圖動作，就不用開視窗了
             log_msg("本次無執行截圖，不開啟設定網頁與資料夾。")
-            self._pop_topmost_message("任務搞定！報告已經產生！\n\n(提示：本次無執行截圖，故未開啟網頁與資料夾)")
-
+            self._pop_topmost_message("任務搞定！報告已經產生！\n\n(提示：本次無執行截圖)")
+            
     def _open_folder_and_notify(self):
         abs_path = os.path.abspath(base_path)
         log_msg("正在為您開啟截圖資料夾...")
@@ -2633,6 +2745,10 @@ class App(tk.Tk):
             # 完全成功的情況，維持原本的提示
             messagebox.showinfo("完成", msg)
 
+        # ==========================================
+        # 🌟 新增這行：當使用者按掉「OK」後，自動關閉主程式
+        # ==========================================
+        self.on_closing()
 
             
     def start_mode_1(self):
