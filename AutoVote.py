@@ -755,11 +755,13 @@ def process_single_revoke():
         log_msg("進入撤銷確認頁面...")
         time.sleep(base_wait)
         
-        for step in range(1, 4): 
+        miss_count = 0  # 新增：用來記錄連續找不到按鈕的次數
+        
+        for step in range(1, 20): 
             confirm_clicked = False
-            log_msg(f"嘗試尋找第 {step} 次確認按鈕或提示框...")
             time.sleep(base_wait)
             
+            # 尋找第一種：一般網頁按鈕
             btns = driver.find_elements(By.XPATH, "//button[contains(text(),'確認')] | //a[contains(text(),'確認')] | //button[contains(text(),'確定')] | //input[@value='確認' or @value='確定']")
             for btn in btns:
                 try:
@@ -770,6 +772,7 @@ def process_single_revoke():
                         break
                 except: pass
                 
+            # 尋找第二種：系統提示視窗
             if not confirm_clicked:
                 try:
                     msg_btn = driver.find_element(By.ID, "msgDialog_okBtn")
@@ -779,6 +782,7 @@ def process_single_revoke():
                         log_msg(f"已同意第 {step} 次確認 (系統提示視窗)。")
                 except: pass
 
+            # 尋找第三種：瀏覽器原生警告彈窗
             if not confirm_clicked:
                 try:
                     alert = driver.switch_to.alert
@@ -787,6 +791,18 @@ def process_single_revoke():
                     confirm_clicked = True
                     log_msg(f"已同意第 {step} 次確認 (瀏覽器警告)，內容: [{alert_text}]")
                 except: pass
+
+            # 💡 智慧跳過邏輯：
+            if confirm_clicked:
+                miss_count = 0  # 如果有點到按鈕，代表還在確認流程中，重置計數器
+            else:
+                miss_count += 1 # 沒找到按鈕，累積失敗次數
+                
+            # 為了避免網頁只是稍微延遲，我們容忍「連續 2 次」找不到
+            # 如果連續 2 次都沒按鈕，就認定確認流程已經結束，直接跳出迴圈
+            if miss_count >= 3:
+                log_msg("已無更多確認按鈕，直接進入下一步...")
+                break
 
         log_msg("等待手動介入選擇憑證... (請在跳出的視窗中操作)")
         log_msg("程式正在背景偵測彈出的視窗，並會自動幫您點擊最後的確認按鈕...")
@@ -870,7 +886,7 @@ def process_single_revoke():
 
 def auto_revoke(user_id, mode, stock_list):
     global driver
-    base_wait = 1 * vote_speed
+    base_wait = 0.5 * vote_speed
     try:
         if "tc_estock_welshas" not in driver.current_url:
             driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
@@ -885,7 +901,7 @@ def auto_revoke(user_id, mode, stock_list):
                 
                 # --- 【新增：處理留 Email 或抽獎等干擾視窗】 ---
                 pass_active_form() # 呼叫原有的抽獎處理
-                for _ in range(2):
+                for _ in range(5):
                     try:
                         # 關閉各種可能的彈窗與略過按鈕
                         skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
@@ -938,9 +954,14 @@ def auto_revoke(user_id, mode, stock_list):
                                 driver.execute_script("arguments[0].click();", revoke_links[0])
                             # -----------------------------------------------
                             
-                            process_single_revoke()
+                            is_success = process_single_revoke()
+                            if is_success:
+                                session_results[user_id]['success'].append(str(stock_id))
+                            else:
+                                session_results[user_id]['fail_vote'].append(str(stock_id))
                         else:
                             log_msg(f"[{stock_id}] 找不到撤銷按鈕，可能尚未投票或無法撤銷。")
+                            session_results[user_id]['fail_vote'].append(f"{stock_id} (無法撤銷)")
                     else:
                         log_msg(f"找不到代號: {stock_id}")
                 except Exception as e:
@@ -957,7 +978,7 @@ def auto_revoke(user_id, mode, stock_list):
                 
                 # --- 【新增強化：掃描前先處理留 Email 或抽獎等干擾視窗】 ---
                 pass_active_form()
-                for _ in range(2):
+                for _ in range(5):
                     try:
                         skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
                         if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click()
@@ -990,8 +1011,12 @@ def auto_revoke(user_id, mode, stock_list):
                                     # -------------------------------------------------
                                     
                                     found_revoke = True
-                                    process_single_revoke()
-                                    break 
+                                    is_success = process_single_revoke()
+                                    if is_success:
+                                        session_results[user_id]['success'].append(str(t_id))
+                                    else:
+                                        session_results[user_id]['fail_vote'].append(str(t_id))
+                                    break
                             except StaleElementReferenceException:
                                 continue
                 except Exception as e:
@@ -2621,64 +2646,64 @@ class App(tk.Tk):
                 self.update_site_list()
                 log_msg(f"🗑️ 已刪除網站: {target}")
 
-    def _finish_task(self):
-        # 1. 取得本次任務統計
-        total_screenshots = sum(len(res.get('success_screenshot', [])) for res in session_results.values())
-        has_shots = total_screenshots > 0
-        
-        # 2. 獲取介面上的選擇
+    def _finish_task(self, task_start_time=None, total_items=0):
+        # 1. 獲取介面上的選擇與統計
         target_name = self.selected_site.get() 
         browser = self.browser_choice_var.get() 
+        total_screenshots = sum(len(res.get('success_screenshot', [])) for res in session_results.values())
+        has_shots = total_screenshots > 0
+
+        # --- 關鍵邏輯 A：如果有截圖，且使用者選擇 5205 自動上傳 ---
+        if target_name == "5205" and has_shots:
+            site_data = saved_sites.get("5205", {})
+            user_email = site_data.get("email", "") if isinstance(site_data, dict) else ""
+            user_pass = site_data.get("password", "") if isinstance(site_data, dict) else ""
+
+            if user_email and user_pass:
+                def run_upload_and_finish():
+                    try:
+                        os.environ["UPLOAD_5205_EMAIL"] = user_email
+                        os.environ["UPLOAD_5205_PASS"] = user_pass
+                        os.environ["UPLOAD_5205_BROWSER"] = browser
+                        log_msg("🚀 正在啟動 5205 自動上傳...")
+                        # 呼叫上傳模組，並把紀錄合併存入 AutoVote (傳入 log_msg)
+                        upload_5205.main(external_log_func=log_msg) 
+                        log_msg("✅ 5205 上傳任務已完全結束。")
+                    except Exception as e:
+                        log_msg(f"❌ 執行上傳時發生錯誤: {e}")
+                    finally:
+                        # 🌟 等待 5205 結束後，結算總耗時並產出合併後的報告
+                        task_end_time = time.time() if task_start_time else None
+                        generate_session_report(task_start_time, task_end_time, total_items) 
+                        self.after(500, self._open_folder_and_notify)
+                
+                threading.Thread(target=run_upload_and_finish, daemon=True).start()
+                return # 結束此函式，剩下的交給 Thread 處理
+            else:
+                log_msg("⚠️ 5205 未設定帳密，取消自動上傳。")
+
+        # --- 關鍵邏輯 B：如果「沒選 5205」或者「沒帳密」或者「沒截圖」 ---
+        
+        # 🌟 沒有 5205，現在直接結算總耗時並產出報告
+        task_end_time = time.time() if task_start_time else None
+        generate_session_report(task_start_time, task_end_time, total_items)
 
         if has_shots:
-            # --- 關鍵路徑 A：如果是 5205 ---
-            if target_name == "5205":
-                site_data = saved_sites.get("5205", {})
-                user_email = site_data.get("email", "") if isinstance(site_data, dict) else ""
-                user_pass = site_data.get("password", "") if isinstance(site_data, dict) else ""
-
-                if user_email and user_pass:
-                    def run_upload_script():
-                        try:
-                            # 1. 一樣設定環境變數，讓 upload_5205 可以讀取
-                            os.environ["UPLOAD_5205_EMAIL"] = user_email
-                            os.environ["UPLOAD_5205_PASS"] = user_pass
-                            os.environ["UPLOAD_5205_BROWSER"] = browser
-                            
-                            log_msg("🚀 正在啟動 5205 自動上傳，請稍候...")
-
-                            # 2. 直接呼叫它的 main()！(它裡面的 print 會自動出現在 GUI 上)
-                            upload_5205.main()
-                            
-                            # 3. 執行完畢後的動作
-                            log_msg("✅ 5205 上傳任務已完全結束。")
-                            self.after(500, self._open_folder_and_notify) 
-                            
-                        except Exception as e:
-                            log_msg(f"❌ 執行上傳時發生錯誤: {e}")
-                    
-                    # 丟到背景執行緒跑，UI 就不會卡住
-                    threading.Thread(target=run_upload_script, daemon=True).start()
-                else:
-                    log_msg("⚠️ 5205 未設定帳密，直接跳過。")
-                    self.after(500, self._open_folder_and_notify)
-
-            # --- 關鍵路徑 B：如果是其他網頁或不開啟 ---
-            else:
-                if target_name != "【不開啟任何網頁】" and target_name:
-                    url_data = saved_sites.get(target_name, "")
-                    url = url_data if isinstance(url_data, str) else url_data.get("url", "")
-                    if url:
-                        try:
-                            if browser == "Edge": subprocess.Popen(f'start msedge "{url}"', shell=True)
-                            elif browser == "Chrome": subprocess.Popen(f'start chrome "{url}"', shell=True)
-                        except: pass
-                
-                # 一般模式直接跳提醒
-                self.after(1000, self._open_folder_and_notify)
+            # 如果是選一般網頁 (例如零股寶)，直接開啟
+            if target_name != "【不開啟任何網頁】" and target_name != "5205":
+                url_data = saved_sites.get(target_name, "")
+                url = url_data if isinstance(url_data, str) else url_data.get("url", "")
+                if url:
+                    try:
+                        if browser == "Edge": subprocess.Popen(f'start msedge "{url}"', shell=True)
+                        elif browser == "Chrome": subprocess.Popen(f'start chrome "{url}"', shell=True)
+                    except: pass
             
+            # 開啟截圖資料夾
+            self.after(1000, self._open_folder_and_notify)
         else:
-            log_msg("本次無執行截圖，不開啟設定網頁與資料夾。")
+            # 完全沒截圖的情況
+            log_msg("本次任務無截圖紀錄。")
             self._pop_topmost_message("任務搞定！報告已經產生！\n\n(提示：本次無執行截圖)")
             
     def _open_folder_and_notify(self):
@@ -2882,15 +2907,15 @@ class App(tk.Tk):
             driver = None
 
         end_time = time.time()
-        generate_session_report(start_time, end_time, total_items)
-        log_msg("=== 任務全部完成 ===")
+        #generate_session_report(start_time, end_time, total_items)
+        log_msg("=== 投票+截圖任務完成 ===")
         if maintenance_flag: 
             self.attributes('-topmost', True)
             self.update()
             self.attributes('-topmost', False)
             messagebox.showwarning("暫停", "因為系統維護，目前已終止任務！")
         else: 
-            self.after(0, self._finish_task)
+            self.after(0, lambda: self._finish_task(start_time, total_items))
 
     def run_logic_mode_2(self, target_accounts, stocks_str):
         global driver, session_results, user_name_map
@@ -2952,9 +2977,9 @@ class App(tk.Tk):
             driver = None
 
         end_time = time.time()
-        generate_session_report(start_time, end_time, total_items)
+        #generate_session_report(start_time, end_time, total_items)
         log_msg("=== 補圖任務結束 ===")
-        self.after(0, self._finish_task)
+        self.after(0, lambda: self._finish_task(start_time, total_items))
 
     def run_logic_mode_3(self, target_accounts, mode, stock_list):
         global driver, session_results, user_name_map
@@ -2983,6 +3008,10 @@ class App(tk.Tk):
                     try: driver = get_driver()
                     except: continue
 
+                # 確保該帳號的統計名單有被建立
+                if target_id not in session_results:
+                    session_results[target_id] = {'success': [], 'fail_vote': [], 'fail_screenshot': [], 'success_screenshot': []}
+
                 try:
                     log_msg(f"--- 撤銷帳號: {target_id} (使用: {current_login_type}) ---")
                     try: 
@@ -3006,16 +3035,11 @@ class App(tk.Tk):
             force_quit_driver(driver)
             driver = None
 
-        end_time = time.time() 
         total_items = sum(len(res.get('success', [])) for res in session_results.values()) 
-        
-        generate_session_report(start_time, end_time, total_items)
-        
         log_msg("=== 撤銷任務結束 ===")
-        self.attributes('-topmost', True)
-        self.update()
-        self.attributes('-topmost', False)
-        messagebox.showinfo("完成", "撤銷任務執行完畢，報告已產生！")
+        
+        # 統一交給 _finish_task 去結算時間、產出報告並跳出完成視窗
+        self.after(0, lambda: self._finish_task(start_time, total_items))
 
 if __name__ == "__main__":
     app = App()
