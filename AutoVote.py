@@ -858,19 +858,32 @@ def process_single_revoke():
                 time.sleep(base_wait)
             except: pass
 
+            # --- 🚀 終極優化：精準偵測撤銷成功頁面 ---
             try:
-                final_btns = driver.find_elements(By.XPATH, "//button[contains(text(),'確認')] | //a[contains(text(),'確認')] | //button[contains(text(),'確定')] | //input[@value='確認' or @value='確定']")
-                for f_btn in final_btns:
-                    if f_btn.is_displayed():
-                        f_btn.click()
-                        log_msg("已自動點擊憑證簽署後的最後確認按鈕 (網頁元素)！")
-                        time.sleep(base_wait)
-                        break
+                current_url = driver.current_url
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+                
+                # 利用你提供的關鍵網址與文字，精準判定是否已經到了最後一步
+                if "01_repeal.html" in current_url or "資料處理成功" in body_text:
+                    log_msg("✅ 偵測到「資料處理成功」最終確認頁面！")
+                    
+                    final_btns = driver.find_elements(By.XPATH, "//button[contains(text(),'確認')] | //a[contains(text(),'確認')] | //input[@value='確認' or @value='確定']")
+                    for f_btn in final_btns:
+                        if f_btn.is_displayed():
+                            try:
+                                f_btn.click() # 先嘗試一般點擊
+                            except:
+                                driver.execute_script("arguments[0].click();", f_btn) # 被擋住就用 JS 強制點擊
+                            log_msg("已極速點擊確認，撤銷完成！")
+                            time.sleep(base_wait)
+                            return True # ✨ 核心關鍵：點完馬上判定成功跳出迴圈，不用等畫面慢慢跳轉回列表！
             except: pass
+            # ------------------------------------------
 
+            # 保留原本的防呆機制，如果因為某些原因直接跳回列表，也能判定成功
             try:
                 if "tc_estock_welshas" in driver.current_url and driver.find_elements(By.NAME, 'qryStockId'):
-                    log_msg("偵測到已返回列表頁面，代表撤銷流程完整結束，接續下一筆。")
+                    log_msg("偵測到已返回列表頁面，接續下一筆。")
                     time.sleep(base_wait)
                     return True
             except: pass
@@ -1024,6 +1037,12 @@ def auto_revoke(user_id, mode, stock_list):
                                         session_results[user_id]['success'].append(str(t_id))
                                     else:
                                         session_results[user_id]['fail_vote'].append(str(t_id))
+                                        
+                                    # --- 🚀 配合極速優化：手動命令瀏覽器光速回到列表頁 ---
+                                    if "tc_estock_welshas" not in driver.current_url:
+                                        driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
+                                        time.sleep(base_wait)
+                                    # -----------------------------------------------------
                                     break
                             except StaleElementReferenceException:
                                 continue
