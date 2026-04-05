@@ -750,7 +750,7 @@ def autoLogin(user_ID, current_login_type="券商網路下單憑證"):
 
 def process_single_revoke():
     global driver, vote_speed
-    base_wait = 0.5 * vote_speed
+    base_wait = 0.1 * vote_speed
     try:
         log_msg("進入撤銷確認頁面...")
         time.sleep(base_wait)
@@ -886,7 +886,7 @@ def process_single_revoke():
 
 def auto_revoke(user_id, mode, stock_list):
     global driver
-    base_wait = 0.5 * vote_speed
+    base_wait = 0.1 * vote_speed
     try:
         if "tc_estock_welshas" not in driver.current_url:
             driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
@@ -899,20 +899,23 @@ def auto_revoke(user_id, mode, stock_list):
             for stock_id in stock_list:
                 log_msg(f"正在搜尋並嘗試撤銷代號: {stock_id}")
                 
-                # --- 【新增：處理留 Email 或抽獎等干擾視窗】 ---
-                pass_active_form() # 呼叫原有的抽獎處理
-                for _ in range(5):
+               # --- 【優化：處理留 Email 或抽獎等干擾視窗】 ---
+                pass_active_form() 
+                for _ in range(3): # 降為 3 次即可
+                    clicked_anything = False
                     try:
-                        # 關閉各種可能的彈窗與略過按鈕
                         skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
-                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click()
+                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click(); clicked_anything = True
                         
                         msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
-                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click()
+                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click(); clicked_anything = True
                         
                         robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
-                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click()
+                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click(); clicked_anything = True
                     except: pass
+                    
+                    if not clicked_anything:
+                        break # 如果這次迴圈沒有發現任何彈窗，直接跳出，不要傻等！
                     time.sleep(base_wait)
                 # ----------------------------------------------
                 
@@ -976,26 +979,31 @@ def auto_revoke(user_id, mode, stock_list):
             while True:
                 found_revoke = False
                 
-                # --- 【新增強化：掃描前先處理留 Email 或抽獎等干擾視窗】 ---
+                # --- 【優化：掃描前先處理留 Email 或抽獎等干擾視窗】 ---
                 pass_active_form()
-                for _ in range(5):
+                for _ in range(3):
+                    clicked_anything = False
                     try:
                         skip_btns = driver.find_elements(By.ID, "comfirmDialog_skipBtn")
-                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click()
+                        if skip_btns and skip_btns[0].is_displayed(): skip_btns[0].click(); clicked_anything = True
                         
                         msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
-                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click()
+                        if msg_btns and msg_btns[0].is_displayed(): msg_btns[0].click(); clicked_anything = True
                         
                         robot_close = driver.find_elements(By.CSS_SELECTOR, 'button[onclick="$.modal.close();return false;"]')
-                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click()
+                        if robot_close and robot_close[0].is_displayed(): robot_close[0].click(); clicked_anything = True
                     except: pass
+                    
+                    if not clicked_anything:
+                        break # 沒有彈窗直接跳出
                     time.sleep(base_wait)
                 # ---------------------------------------------------------
 
                 try:
-                    trs = driver.find_elements(By.TAG_NAME,'tr')
-                    if len(trs) > 1:
-                        for row in trs[1:]:
+                    # 🚀 神級優化：直接用 XPATH 叫瀏覽器找出「有撤銷按鈕」的列，不用一行一行慢慢找了！
+                    target_rows = driver.find_elements(By.XPATH, "//tr[.//a[contains(text(),'撤銷')]]")
+                    if target_rows:
+                        for row in target_rows:
                             try:
                                 revoke_links = row.find_elements(By.XPATH, ".//a[contains(text(),'撤銷')]")
                                 if revoke_links and revoke_links[0].is_displayed():
@@ -1240,11 +1248,12 @@ def autovote(user_ID):
         while True:
             pass_active_form()
             try:
-                trs = driver.find_elements(By.TAG_NAME,'tr')
+                # 🚀 神級優化：直接用 XPATH 一次性篩選出包含「未投票」文字的列
+                target_rows = driver.find_elements(By.XPATH, "//tr[contains(., '未投票')]")
                 target_row = None; target_stock_id = ""; target_stock_name = ""
 
-                if len(trs) > 1:
-                    for row in trs[1:]:
+                if target_rows:
+                    for row in target_rows:
                         try:
                             row_text = row.text
                             if "未投票" in row_text:
