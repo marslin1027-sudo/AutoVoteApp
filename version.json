@@ -1,6 +1,6 @@
 {
-    "version": "3.8",
-    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v3.8/AutoVote_v3.8.exe",
+    "version": "3.9",
+    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v3.9/AutoVote_v3.9.exe",
     "date": "2026-04-05",
-    "notes": "優化速度"
+    "notes": "例行性更新與效能優化"
 }
