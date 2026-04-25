@@ -1294,10 +1294,13 @@ def autovote(user_ID):
                             btns = tds[3].find_elements(By.TAG_NAME,'a')
                             if btns:
                                 try:
-                                    btns[0].click()
+                                    btns[0].click() # 先嘗試一般點擊
                                 except StaleElementReferenceException:
                                     log_msg(f"[{target_stock_id}] 點擊瞬間頁面刷新，嘗試繼續...")
                                     pass
+                                except Exception:
+                                    # 新增防護：若被隱形遮罩或彈窗擋住 (ElementClickInterceptedException)，直接用 JS 無視遮罩硬點
+                                    driver.execute_script("arguments[0].click();", btns[0])
                                 
                                 time.sleep(base_wait * 2) 
                                 
