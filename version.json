@@ -1,6 +1,6 @@
 {
-    "version": "4.2",
-    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v4.2/AutoVote_v4.2.exe",
+    "version": "4.3",
+    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v4.3/AutoVote_v4.3.exe",
     "date": "2026-04-25",
-    "notes": "補圖偵測資料夾，不重複截圖"
+    "notes": "更新比對戶名不重複截圖"
 }
