@@ -1264,6 +1264,8 @@ def autovote(user_ID):
             time.sleep(base_wait)
             
         log_msg("------ 列表掃描中 ------")
+        page_turn_count = 0  # === ✨ 新增：翻頁計數器 ===
+        
         while True:
             pass_active_form()
             try:
@@ -1288,56 +1290,112 @@ def autovote(user_ID):
 
                 if target_row:
                     log_msg(f"發現未投票: {target_stock_id} {target_stock_name}")
-                    try:
-                        tds = target_row.find_elements(By.TAG_NAME,'td')
-                        if len(tds) > 3:
-                            btns = tds[3].find_elements(By.TAG_NAME,'a')
-                            if btns:
-                                try:
-                                    btns[0].click() # 先嘗試一般點擊
-                                except StaleElementReferenceException:
-                                    log_msg(f"[{target_stock_id}] 點擊瞬間頁面刷新，嘗試繼續...")
-                                    pass
-                                except Exception:
-                                    # 新增防護：若被隱形遮罩或彈窗擋住 (ElementClickInterceptedException)，直接用 JS 無視遮罩硬點
-                                    driver.execute_script("arguments[0].click();", btns[0])
+                    
+                    # === 局部重試機制 (解決 StaleElement 導致的漏投) ===
+                    retry_count = 0
+                    success_this_row = False
+                    
+                    while retry_count < 3 and not success_this_row:
+                        try:
+                            # 重新定位該行元素，避免上一秒抓到的 target_row 已經過期失效
+                            current_rows = driver.find_elements(By.XPATH, f"//tr[contains(., '{target_stock_id}') and contains(., '未投票')]")
+                            if not current_rows:
+                                log_msg(f"[{target_stock_id}] 畫面已找不到該筆未投票，可能已處理或跳頁...")
+                                break # 跳出局部重試
                                 
-                                time.sleep(base_wait * 2) 
-                                
-                                msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
-                                if msg_btns and msg_btns[0].is_displayed():
-                                    try: msg_btns[0].click()
-                                    except: pass
-
-                                is_success = voting()
-                                record_text = f"{target_stock_id} {target_stock_name}".strip()
-                                
-                                if is_success:
-                                    if user_ID not in voteinfolist: voteinfolist[user_ID] = {}
-                                    if isinstance(voteinfolist[user_ID], list): 
-                                        voteinfolist[user_ID] = {sid: 0 for sid in voteinfolist[user_ID]}
+                            safe_row = current_rows[0]
+                            tds = safe_row.find_elements(By.TAG_NAME,'td')
+                            
+                            if len(tds) > 3:
+                                btns = tds[3].find_elements(By.TAG_NAME,'a')
+                                if btns:
+                                    try:
+                                        btns[0].click() 
+                                    except Exception:
+                                        driver.execute_script("arguments[0].click();", btns[0])
                                     
-                                    if target_stock_id not in voteinfolist[user_ID]:
-                                        voteinfolist[user_ID][target_stock_id] = 0
-                                    write_voteinfolist(voteinfolist)
-                                    session_results[user_ID]['success'].append(record_text)
-                                    log_msg(f"[{target_stock_id}] 投票成功！")
+                                    time.sleep(base_wait * 2) 
+                                    
+                                    msg_btns = driver.find_elements(By.ID, "msgDialog_okBtn")
+                                    if msg_btns and msg_btns[0].is_displayed():
+                                        try: msg_btns[0].click()
+                                        except: pass
+
+                                    is_success = voting()
+                                    record_text = f"{target_stock_id} {target_stock_name}".strip()
+                                    
+                                    if is_success:
+                                        if user_ID not in voteinfolist: voteinfolist[user_ID] = {}
+                                        if isinstance(voteinfolist[user_ID], list): 
+                                            voteinfolist[user_ID] = {sid: 0 for sid in voteinfolist[user_ID]}
+                                        
+                                        if target_stock_id not in voteinfolist[user_ID]:
+                                            voteinfolist[user_ID][target_stock_id] = 0
+                                        write_voteinfolist(voteinfolist)
+                                        session_results[user_ID]['success'].append(record_text)
+                                        log_msg(f"[{target_stock_id}] 投票成功！")
+                                    else:
+                                        session_results[user_ID]['fail_vote'].append(record_text)
+                                        log_msg(f"[{target_stock_id}] 投票未完成")
+                                        failed_attempts.add(target_stock_id)
+                                    
+                                    success_this_row = True 
+                                    
+                                    if "tc_estock_welshas" not in driver.current_url:
+                                         driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
+                                         time.sleep(base_wait * 2)
                                 else:
-                                    session_results[user_ID]['fail_vote'].append(record_text)
-                                    log_msg(f"[{target_stock_id}] 投票未完成")
-                                    failed_attempts.add(target_stock_id)
+                                    raise Exception("找不到進入投票的 <a> 按鈕")
+                            else:
+                                raise Exception("表格 <td> 欄位數量不足")
                                 
-                                if "tc_estock_welshas" not in driver.current_url:
-                                     driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
-                            else: failed_attempts.add(target_stock_id)
-                        else: failed_attempts.add(target_stock_id)
-                    except Exception as e:
-                        log_msg(f"單筆處理異常 ({target_stock_id}): {e}")
+                        except StaleElementReferenceException:
+                            retry_count += 1
+                            log_msg(f"[{target_stock_id}] 元素失效 (畫面刷新)，進行第 {retry_count} 次重試...")
+                            time.sleep(base_wait * 2)
+                        except Exception as e:
+                            retry_count += 1
+                            log_msg(f"[{target_stock_id}] 單筆處理異常: {e}，進行第 {retry_count} 次重試...")
+                            time.sleep(base_wait * 2)
+                            
+                    if not success_this_row:
+                        log_msg(f"[{target_stock_id}] 連續重試 3 次失敗，放棄此筆，繼續下一筆。")
                         failed_attempts.add(target_stock_id)
-                        driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
+                        if "tc_estock_welshas" not in driver.current_url:
+                            driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
+                            time.sleep(base_wait * 2)
+
                 else:
-                    log_msg(f"------ 本帳號已無待辦事項 ------")
-                    break
+                    # === ✨ 新增：自動翻頁檢查機制 (最多翻 2 頁) ===
+                    found_next_page = False
+                    
+                    if page_turn_count < 2:  # 限制判斷：小於 2 次才允許翻頁
+                        try:
+                            next_btns = driver.find_elements(By.XPATH, "//a[contains(text(),'下一頁') or contains(text(),'下頁')] | //button[contains(text(),'下一頁') or contains(text(),'下頁')] | //input[@value='下一頁' or @value='下頁']")
+                            
+                            for btn in next_btns:
+                                if btn.is_displayed():
+                                    btn_class = btn.get_attribute("class") or ""
+                                    if "disable" not in btn_class.lower():
+                                        page_turn_count += 1 # 翻頁前計數 +1
+                                        log_msg(f"目前頁面無未投票，翻至第 {page_turn_count + 1} 頁檢查 (剩餘額度: {2 - page_turn_count})...")
+                                        try:
+                                            btn.click()
+                                        except:
+                                            driver.execute_script("arguments[0].click();", btn)
+                                        time.sleep(base_wait * 3)
+                                        found_next_page = True
+                                        break
+                        except Exception as page_e:
+                            log_msg(f"翻頁檢查時發生錯誤: {page_e}")
+                    else:
+                        log_msg("已達最大自動翻頁限制 (2頁)，停止往下掃描以節省時間。")
+                        
+                    if found_next_page:
+                        continue 
+                    else:
+                        log_msg(f"------ 頁面掃描完畢，本帳號無待辦事項 ------")
+                        break
             except Exception as e:
                 log_msg(f"列表掃描錯誤: {e}"); return 1
         return 0
@@ -1504,7 +1562,7 @@ def auto_screenshot(user_id, stock_id):
                             time.sleep(base_wait)
                         if page_loaded: break 
                     else:
-                        time.sleep(base_wait * 5)
+                        time.sleep(base_wait * 2)
                         continue
                 except: time.sleep(base_wait * 2)
             
