@@ -1522,6 +1522,23 @@ def auto_screenshot(user_id, stock_id):
             voteinfo.extend(parts[0:2])
             report_text = f"{voteinfo[0]} {voteinfo[1]}".strip() if len(voteinfo) > 1 else stock_id
 
+            # ================= 【新增：檢查圖片是否已存在 (略過日期)】 =================
+            import glob
+            stock_id_str = voteinfo[0]
+            stock_name_str = clean_filename(voteinfo[1].replace('*',''))
+            if len(stock_name_str) > 20: stock_name_str = stock_name_str[:20]
+
+            # 支援 Mode 1 (各帳號獨立資料夾) 的模糊搜尋：資料夾/*_代號_公司名.png
+            pattern_mode1 = os.path.join(base_path, "*", f"*_{stock_id_str}_{stock_name_str}.png")
+            # 支援 Mode 2 (全放一起) 的模糊搜尋：*_代號_公司名_*.png
+            pattern_mode2 = os.path.join(base_path, f"*_{stock_id_str}_{stock_name_str}_*.png")
+
+            if glob.glob(pattern_mode1) or glob.glob(pattern_mode2):
+                log_msg(f"[{stock_id_str}] 圖片已存在資料夾中 (略過日期比對)，自動跳過截圖。")
+                session_results[user_id]['success_screenshot'].append(f"{report_text} (已存在跳過)")
+                return 0
+            # ===========================================================================
+
             page_loaded = False
             for attempt in range(5):
                 try:
