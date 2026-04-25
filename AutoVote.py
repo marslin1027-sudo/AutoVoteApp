@@ -1522,23 +1522,25 @@ def auto_screenshot(user_id, stock_id):
             voteinfo.extend(parts[0:2])
             report_text = f"{voteinfo[0]} {voteinfo[1]}".strip() if len(voteinfo) > 1 else stock_id
 
-            # ================= 【新增：檢查圖片是否已存在 (略過日期)】 =================
+            # ================= 【第一道防線：列表頁提前比對】 =================
             import glob
             stock_id_str = voteinfo[0]
             stock_name_str = clean_filename(voteinfo[1].replace('*',''))
             if len(stock_name_str) > 20: stock_name_str = stock_name_str[:20]
 
-            # 支援 Mode 1 (各帳號獨立資料夾) 的模糊搜尋：資料夾/*_代號_公司名.png
-            pattern_mode1 = os.path.join(base_path, "*", f"*_{stock_id_str}_{stock_name_str}.png")
-            # 支援 Mode 2 (全放一起) 的模糊搜尋：*_代號_公司名_*.png
-            pattern_mode2 = os.path.join(base_path, f"*_{stock_id_str}_{stock_name_str}_*.png")
+            # 抓取並清理當前 UI 帳號名稱
+            current_user_name = clean_filename(user_name_map.get(user_id, str(user_id)))
+            safe_display_name = current_user_name if len(current_user_name) < 10 else current_user_name[:10]
+
+            pattern_mode1 = os.path.join(base_path, current_user_name, f"*_{stock_id_str}_{stock_name_str}.png")
+            pattern_mode2 = os.path.join(base_path, f"*_{stock_id_str}_{stock_name_str}_{safe_display_name}.png")
 
             if glob.glob(pattern_mode1) or glob.glob(pattern_mode2):
-                log_msg(f"[{stock_id_str}] 圖片已存在資料夾中 (略過日期比對)，自動跳過截圖。")
+                log_msg(f"[{stock_id_str}] [{current_user_name}] 圖片已存在，提前跳過截圖。")
                 session_results[user_id]['success_screenshot'].append(f"{report_text} (已存在跳過)")
                 return 0
             # ===========================================================================
-
+            
             page_loaded = False
             for attempt in range(5):
                 try:
@@ -1666,6 +1668,20 @@ def auto_screenshot(user_id, stock_id):
                             break 
                     except: pass
                     time.sleep(base_wait)
+
+            # ================= 【第二道防線：抓到實際戶名後再次比對】 =================
+            # 解決「網頁實際戶名」與「設定頁名稱」不同導致第一道防線漏掉的問題
+            safe_actual_name = actual_display_name if len(actual_display_name) < 10 else actual_display_name[:10]
+            pattern_mode1_real = os.path.join(base_path, actual_display_name, f"*_{stock_id_str}_{stock_name_str}.png")
+            pattern_mode2_real = os.path.join(base_path, f"*_{stock_id_str}_{stock_name_str}_{safe_actual_name}.png")
+
+            if glob.glob(pattern_mode1_real) or glob.glob(pattern_mode2_real):
+                log_msg(f"[{stock_id_str}] [{actual_display_name}] 圖片已存在，跳過重複截圖。")
+                session_results[user_id]['success_screenshot'].append(f"{report_text} (已存在跳過)")
+                try: driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR,'button[onclick="back(); return false;"]'))
+                except: pass
+                return 0
+            # ===========================================================================
 
             voteinfo.append("unknown") 
             res = screenshot(user_id, voteinfo, override_name=actual_display_name) # 將算好的名稱傳過去
