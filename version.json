@@ -1,6 +1,6 @@
 {
-    "version": "4.4",
-    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v4.4/AutoVote_v4.4.exe",
-    "date": "2026-04-26",
-    "notes": "改LOGO"
+    "version": "5.0",
+    "url": "https://github.com/PyRoutine/AutoVoteApp/releases/download/v5.0/AutoVote_v5.0.exe",
+    "date": "2026-05-02",
+    "notes": "EGIFT排除不截圖\n增加掃描EGIFT清單"
 }
