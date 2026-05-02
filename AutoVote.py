@@ -20,6 +20,8 @@ import subprocess
 import urllib.parse
 import upload_5205  # <--- 新增這行，把上傳模組匯入
 from __version__ import CURRENT_VERSION
+from tkinter import filedialog
+import pandas as pd
 
 
 VERSION_INFO_URL = "https://raw.githubusercontent.com/PyRoutine/AutoVoteApp/refs/heads/main/version.json"
@@ -770,7 +772,7 @@ def process_single_revoke():
                     if btn.is_displayed():
                         btn.click()
                         confirm_clicked = True
-                        log_msg(f"已點擊第 {step} 次確認 (網頁按鈕)。")
+                        log_msg(f"已點擊確認 (網頁按鈕)。")
                         break
                 except: pass
                 
@@ -781,7 +783,7 @@ def process_single_revoke():
                     if msg_btn.is_displayed():
                         msg_btn.click()
                         confirm_clicked = True
-                        log_msg(f"已同意第 {step} 次確認 (系統提示視窗)。")
+                        log_msg(f"已同意確認 (系統提示視窗)。")
                 except: pass
 
             # 尋找第三種：瀏覽器原生警告彈窗
@@ -791,7 +793,7 @@ def process_single_revoke():
                     alert_text = alert.text
                     alert.accept()
                     confirm_clicked = True
-                    log_msg(f"已同意第 {step} 次確認 (瀏覽器警告)，內容: [{alert_text}]")
+                    log_msg(f"已同意確認 (瀏覽器警告)，內容: [{alert_text}]")
                 except: pass
 
             # 💡 智慧跳過邏輯：
@@ -2467,6 +2469,111 @@ class App(tk.Tk):
         self.save_config()
         self.refresh_user_lists()
         log_msg(f"🗑️ 已刪除帳號: {uid}")
+
+    def generate_excel_template(self):
+        try:
+            # 定義標準欄位與兩筆範例資料
+            data = {
+                '姓名': ['王小明', '陳大同','張小花'],
+                '身分證': ['A123456789', 'B987654321','F129999950'],
+                '登入方式': ['券商網路下單憑證', '自然人憑證','行動自然人憑證']
+            }
+            df = pd.DataFrame(data)
+            
+            # 預設儲存到與程式相同的資料夾
+            save_path = os.path.join(get_executable_dir(), "帳號匯入範本.xlsx")
+            
+            # --- 使用 ExcelWriter 寫入並自動調整欄寬 ---
+            with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='匯入範本')
+                worksheet = writer.sheets['匯入範本']
+                
+                # 針對每一欄計算最大長度並設定欄寬
+                for i, col in enumerate(df.columns):
+                    # 取得該欄資料與標題的最大字元數
+                    max_len = max(df[col].astype(str).map(len).max(), len(str(col)))
+                    # 設定欄寬 (因為中文字在 Excel 裡比較寬，所以字元數乘上 2.2 倍加上一點緩衝空間)
+                    worksheet.column_dimensions[chr(65 + i)].width = max_len * 2.2 + 2
+            # ------------------------------------------
+            
+            messagebox.showinfo("成功", f"空白範本已產生！\n\n檔案位置：\n{save_path}")
+            log_msg("📄 已自動產生 Excel 匯入範本")
+            
+        except Exception as e:
+            messagebox.showerror("錯誤", f"產生範本時發生錯誤:\n{e}\n\n(請確認環境是否有安裝 pandas 與 openpyxl 套件)")
+
+    def import_from_excel(self):
+        # 1. 跳出檔案選擇視窗
+        file_path = filedialog.askopenfilename(
+            title="選擇 Excel 檔案",
+            filetypes=[("Excel 檔案", "*.xlsx *.xls"), ("所有檔案", "*.*")]
+        )
+        if not file_path:
+            return
+
+        try:
+            # 2. 讀取 Excel 檔案
+            df = pd.read_excel(file_path)
+            
+            imported_count = 0
+            updated_count = 0
+            
+            # 3. 逐行解析資料
+            for index, row in df.iterrows():
+                try:
+                    # 支援兩種模式：有標題(姓名,身分證,登入方式) 或 無標題直接抓前三欄
+                    name = str(row['姓名']).strip() if '姓名' in df.columns else str(row.iloc[0]).strip()
+                    uid = str(row['身分證']).strip().upper() if '身分證' in df.columns else str(row.iloc[1]).strip().upper()
+                    
+                    # 處理登入方式 (若無此欄位則預設為第一個)
+                    if '登入方式' in df.columns:
+                        login = str(row['登入方式']).strip()
+                    elif len(df.columns) > 2:
+                        login = str(row.iloc[2]).strip()
+                    else:
+                        login = "券商網路下單憑證"
+
+                except IndexError:
+                    continue # 欄位數量不足，跳過此行
+                
+                # 排除空白或 nan 資料
+                if not name or not uid or pd.isna(name) or pd.isna(uid) or name == 'nan' or uid == 'NAN':
+                    continue
+                    
+                # 驗證登入方式是否合法，不合法直接給預設值
+                valid_logins = ["券商網路下單憑證", "自然人憑證", "行動自然人憑證"]
+                if login not in valid_logins:
+                    login = "券商網路下單憑證"
+
+                global user_accounts
+                # 4. 檢查是否已存在 (以身分證為準)
+                target_idx = -1
+                for i, acc in enumerate(user_accounts):
+                    if acc['id'] == uid:
+                        target_idx = i
+                        break
+                        
+                if target_idx != -1:
+                    # 存在則覆蓋更新
+                    user_accounts[target_idx]['name'] = name
+                    user_accounts[target_idx]['login_type'] = login
+                    updated_count += 1
+                else:
+                    # 不存在則新增
+                    user_accounts.append({'name': name, 'id': uid, 'login_type': login})
+                    imported_count += 1
+
+            # 5. 存檔與重整 UI
+            self.save_config()
+            self.refresh_user_lists()
+            
+            msg = f"成功從 Excel 讀取資料！\n\n✅ 新增了 {imported_count} 筆帳號\n🔄 更新了 {updated_count} 筆帳號"
+            messagebox.showinfo("匯入成功", msg)
+            log_msg(f"📥 Excel 匯入完成: 新增 {imported_count} 筆, 更新 {updated_count} 筆")
+
+        except Exception as e:
+            messagebox.showerror("匯入失敗", f"讀取 Excel 時發生錯誤:\n{e}\n\n請確認檔案格式是否正確。")
+            log_msg(f"❌ Excel 匯入失敗: {e}")
         
     def create_widgets(self):
         main_container = ttk.Frame(self, padding="10")
@@ -2707,7 +2814,13 @@ class App(tk.Tk):
                 tree_scroll.pack_forget()
         self.refresh_user_lists = wrapped_refresh
 
-        ttk.Button(user_frame, text="刪除選取帳號", command=self.delete_selected_user, style='Red.TButton').pack(anchor="e", padx=5, pady=(0,5))
+        # 將「產生範本」、「匯入」與「刪除」按鈕包裝在一起，並排顯示
+        btn_action_frame = ttk.Frame(user_frame)
+        btn_action_frame.pack(anchor="e", padx=5, pady=(0,5))
+        
+        ttk.Button(btn_action_frame, text="產生匯入範本", command=self.generate_excel_template).pack(side="left", padx=5)
+        ttk.Button(btn_action_frame, text="從 EXCEL 匯入", command=self.import_from_excel, style='Action.TButton').pack(side="left", padx=5)
+        ttk.Button(btn_action_frame, text="刪除選取帳號", command=self.delete_selected_user, style='Red.TButton').pack(side="left", padx=5)
 
         # 速度與進階設定
         spd_frame = ttk.Frame(frame_setting)
