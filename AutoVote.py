@@ -53,6 +53,8 @@ user_accounts = [] # <--- 新增：取代 shareholderIDs，儲存格式為 [{'na
 saved_sites = {} # <--- 新增：用來儲存自訂網址的字典
 browser_choice = "Edge" # <--- 新增：預設瀏覽器
 name_source_mode = 1
+all_egift_records = {} # <--- 新增這行，用來收集所有帳號的 E-Gift
+session_egift_count = 0 # <--- 新增這行，用來紀錄這次任務遇到幾個 E-Gift
 
 # 新增：速率分離與視窗記憶
 vote_speed = 2.0  
@@ -286,7 +288,7 @@ def perform_update(download_url):
         progress_win.update()
 
         # ==========================================
-        # 🚀 極速下載引擎 (多執行緒 + UI 連動)
+        # 🚀速下載引擎 (多執行緒 + UI 連動)
         # ==========================================
         head_req = requests.head(download_url, allow_redirects=True)
         total_size = int(head_req.headers.get('content-length', 0))
@@ -874,7 +876,7 @@ def process_single_revoke():
                                 f_btn.click() # 先嘗試一般點擊
                             except:
                                 driver.execute_script("arguments[0].click();", f_btn) # 被擋住就用 JS 強制點擊
-                            log_msg("已極速點擊確認，撤銷完成！")
+                            log_msg("已點擊確認，撤銷完成！")
                             time.sleep(base_wait)
                             return True # ✨ 核心關鍵：點完馬上判定成功跳出迴圈，不用等畫面慢慢跳轉回列表！
             except: pass
@@ -1038,7 +1040,7 @@ def auto_revoke(user_id, mode, stock_list):
                                     else:
                                         session_results[user_id]['fail_vote'].append(str(t_id))
                                         
-                                    # --- 🚀 配合極速優化：手動命令瀏覽器光速回到列表頁 ---
+                                    # --- 🚀 配速優化：手動命令瀏覽器光速回到列表頁 ---
                                     if "tc_estock_welshas" not in driver.current_url:
                                         driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
                                         time.sleep(base_wait)
@@ -1086,7 +1088,7 @@ def voting():
                         time.sleep(base_wait * 3)
                         continue
                     elif not logged_hidden_robot:
-                        log_msg("發現機器人驗證按鈕(可能被遮擋或尚未載入完成)")
+                        log_msg("發現機器人驗證按鈕")
                         logged_hidden_robot = True # 只印一次避免洗畫面
             except Exception as e:
                 log_msg(f"處理機器人驗證時發生錯誤: {e}")
@@ -1160,7 +1162,7 @@ def voting():
                 if js_script:
                     if driver.execute_script(js_script): 
                         if not getattr(driver, '_logged_vote_action', False): # 簡單防止重複洗頻
-                            log_msg(f"已透過腳本執行預設投票: {default_vote}")
+                            log_msg(f"已透過腳本執行預設投票")
                             driver._logged_vote_action = True
                         clicked_vote = True
 
@@ -1515,6 +1517,26 @@ def auto_screenshot(user_id, stock_id):
             session_results[user_id]['fail_screenshot'].append(f"{stock_id} (未投票)")
             return 2
         # --------------------------------
+        # ==================== 請在此處加入以下代碼 ====================
+        # --- 【新增：檢查是否符合 E-Gift 資格 (免截圖)】 ---
+        try:
+            rows = driver.find_elements(By.TAG_NAME,'tr')
+            if len(rows) > 1:
+                tds = rows[1].find_elements(By.TAG_NAME, 'td')
+                if len(tds) >= 5:
+                    egift_text = tds[4].text.strip()
+                    if "Y" in egift_text:
+                        # ===== 請加入這兩行 =====
+                        global session_egift_count
+                        session_egift_count += 1
+                        # ======================
+                        log_msg(f"[{stock_id}] 符合 E-Gift 資格，跳過截圖！")
+                        report_text = f"{stock_id} (E-Gift免截圖)"
+                        session_results[user_id]['success_screenshot'].append(report_text)
+                        return 0 # 直接回傳 0 (代表成功，從待辦佇列中移除)
+        except Exception as e:
+            pass
+        # ==========================================================
         voteinfo = []
         try:
             row = driver.find_elements(By.TAG_NAME,'tr')[1]
@@ -1698,6 +1720,119 @@ def auto_screenshot(user_id, stock_id):
             return 1
     except: return 1
 
+def scan_egifts_and_save(user_id):
+    global driver, user_name_map, all_egift_records
+    log_msg("=== 開始掃描 E-Gift 領取清單 ===")
+    
+    # 1. 確保回到總表並強制清除搜尋
+    try:
+        if "tc_estock_welshas" not in driver.current_url:
+            driver.get("https://stockservices.tdcc.com.tw/evote/shareholder/000/tc_estock_welshas.html")
+            time.sleep(1)
+            
+        pass_active_form()
+        search_input = driver.find_elements(By.NAME, 'qryStockId')
+        if search_input:
+            search_input[0].clear()
+            search_btn = driver.find_element(By.CSS_SELECTOR, 'a[onclick="qryByStockId();"]')
+            driver.execute_script("arguments[0].click();", search_btn)
+            
+            # 等待表格出現
+            for _ in range(100):
+                time.sleep(0.05)
+                if driver.find_elements(By.ID, 'stockInfo'):
+                    break
+    except Exception as e:
+        pass
+        
+    user_name = user_name_map.get(user_id, str(user_id))
+    user_egift_list = []
+    page_count = 1
+    
+    # === 🌟 速度飆升的關鍵：用 JavaScript 讓瀏覽器自己秒抓資料 ===
+    js_parser = """
+    var results = [];
+    var rows = document.querySelectorAll("table#stockInfo tr");
+    for(var i=1; i<rows.length; i++){
+        var tds = rows[i].querySelectorAll("td");
+        if(tds.length >= 5){
+            var egift = tds[4].innerText;
+            if(egift.indexOf("Y") !== -1){
+                var stock = tds[0].innerText.replace(/\\n/g, ' ').trim();
+                var dateStr = "未知日期";
+                var lines = egift.split('\\n');
+                for(var j=0; j<lines.length; j++){
+                    if(lines[j].indexOf('/') !== -1){
+                        dateStr = lines[j].trim();
+                        break;
+                    }
+                }
+                results.push({"stock": stock, "date": dateStr});
+            }
+        }
+    }
+    return results;
+    """
+    
+    while True:
+        pass_active_form()
+        
+        # 1. 執行 JS，瞬間把當頁有 Y 的資料全部抓回來
+        try:
+            page_data = driver.execute_script(js_parser)
+            for item in page_data:
+                if item not in user_egift_list:
+                    user_egift_list.append(item)
+        except Exception as e:
+            log_msg(f"掃描發生錯誤: {e}")
+            
+        # 2. 尋找下一頁按鈕並點擊
+        try:
+            # 記住現在的「頁碼文字」(例如：共計295筆 頁次：1/15)
+            page_info = driver.find_elements(By.XPATH, "//table[@id='tbDisplayTag']//td[contains(text(), '頁次')]")
+            current_page_text = page_info[0].text if page_info else ""
+            
+            next_btns = driver.find_elements(By.XPATH, "//a[contains(text(),'下一頁') or contains(text(),'下頁')] | //img[@alt='下一頁' or @alt='下頁'] | //input[@value='下一頁' or @value='下頁']")
+            
+            found_next = False
+            for btn in next_btns:
+                if btn.is_displayed():
+                    btn_class = btn.get_attribute("class") or ""
+                    parent_class = ""
+                    try: parent_class = btn.find_element(By.XPATH, "..").get_attribute("class") or ""
+                    except: pass
+                    
+                    if "disable" not in btn_class.lower() and "disable" not in parent_class.lower():
+                        driver.execute_script("arguments[0].click();", btn)
+                        found_next = True
+                        page_count += 1
+                        log_msg(f"翻至第 {page_count} 頁...")
+                        
+                        # === 🌟 智慧等待：不要死等，只要頁碼文字一變，就馬上跳出繼續抓 ===
+                        for _ in range(50): # 最多等 5 秒
+                            time.sleep(0.1)
+                            new_page_info = driver.find_elements(By.XPATH, "//table[@id='tbDisplayTag']//td[contains(text(), '頁次')]")
+                            new_text = new_page_info[0].text if new_page_info else ""
+                            if new_text != current_page_text:
+                                break # 頁碼變了，代表下一頁載入完成了，馬上開抓！
+                        break
+                        
+            if not found_next:
+                break 
+        except Exception as e:
+            break
+            
+    # 依照日期升冪排序
+    user_egift_list = sorted(user_egift_list, key=lambda x: x['date'])
+    
+    # 存入全域紀錄中
+    all_egift_records[user_name] = user_egift_list
+    
+    # 產出實體檔案
+    generate_combined_egift_file()
+    
+    log_msg(f"✅ {user_name} 的 E-Gift 掃描完畢，共 {len(user_egift_list)} 筆，已合併更新至清單！")
+    
 def write_voteinfolist(voteinfolist):
     base = os.path.join(CONFIG_DIR, "queue_data")
     if not os.path.exists(base): os.makedirs(base)
@@ -1710,7 +1845,36 @@ def write_voteinfolist(voteinfolist):
                 f.writelines([f"{sid},0\n" for sid in stock_data])
             else:
                 f.writelines([f"{sid},{count}\n" for sid, count in stock_data.items()])
-
+def generate_combined_egift_file():
+    global all_egift_records
+    
+    # 設定存檔路徑為程式執行的相同資料夾，檔名固定
+    exe_dir = get_executable_dir()
+    file_path = os.path.join(exe_dir, "E-Gift領取清單.txt")
+    
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("=== E-Gift 領取清單 ===\n")
+            f.write(f"最後更新時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 40 + "\n\n")
+            
+            if not all_egift_records:
+                f.write("目前尚無任何 E-Gift 紀錄。\n")
+                return
+                
+            # 依序寫入每個戶名的資料
+            for user_name, egifts in all_egift_records.items():
+                f.write(f"【 戶名：{user_name} 】\n")
+                f.write("-" * 40 + "\n")
+                if egifts:
+                    for item in egifts:
+                        f.write(f"{item['stock']} - 開始領取日: {item['date']}\n")
+                else:
+                    f.write("無符合資格的項目。\n")
+                f.write("\n") # 戶名之間的空行
+    except Exception as e:
+        log_msg(f"儲存合併 E-Gift 清單失敗: {e}")
+        
 def read_voteinfolist(voteinfolist):
     base = os.path.join(CONFIG_DIR, "queue_data")
     if not os.path.exists(base): return
@@ -2334,7 +2498,7 @@ class App(tk.Tk):
         tab5 = ttk.Frame(tab_control, padding="10")
         
         tab_control.add(tab1, text='  自動任務  ')
-        tab_control.add(tab2, text='  撤銷投票  ')
+        tab_control.add(tab2, text='  撤銷與 E-Gift  ') # <--- 改成這個
         tab_control.add(tab3, text='  設定  ')
         tab_control.add(tab4, text='  系統資訊  ') 
         tab_control.add(tab5, text='  網址管理  ')
@@ -2472,6 +2636,16 @@ class App(tk.Tk):
         # 🟢 請在這裡加入這兩行程式碼（新增撤銷按鈕） 🟢
         btn_mode3 = ttk.Button(frame_revoke, text="執行撤銷投票", style='Red.TButton', command=self.start_mode_3, cursor="hand2")
         btn_mode3.pack(fill="x", padx=15, pady=(10, 15))
+        # ==========================================
+        # === 以下為 Tab 2 新增：E-Gift 手動掃描區 ===
+        # ==========================================
+        frame_egift = ttk.LabelFrame(tab2, text=" E-Gift 全面掃描工具 ")
+        frame_egift.pack(fill="x", pady=5, ipady=5)
+        
+        ttk.Label(frame_egift, text="掃描上方勾選帳號的 E-Gift 清單，並合併產出文字檔。").pack(anchor="w", padx=10, pady=5)
+        
+        btn_egift = ttk.Button(frame_egift, text="執行 E-Gift 掃描", style='Action.TButton', command=self.start_egift_scan, cursor="hand2")
+        btn_egift.pack(fill="x", padx=15, pady=5)
         
         # ==========================================
         # === Tab 3: 設定 ===
@@ -2879,6 +3053,11 @@ class App(tk.Tk):
         self.update()
         # 關鍵：馬上解除最上層鎖定，讓彈跳視窗不會死鎖在螢幕前
         self.attributes('-topmost', False)
+        # === 🌟 加入這段：如果有 E-Gift，在訊息後面加上提醒 ===
+        global session_egift_count
+        if session_egift_count > 0:
+            msg += f"\n\n🎁 提醒：本次任務共發現 {session_egift_count} 筆符合 E-Gift 資格的公司！\n👉 請記得前往「撤銷與 E-Gift」分頁手動更新清單喔！"
+        # ========================================================
         
         # 統計失敗數量 (包含投票失敗與截圖失敗)
         fail_count = sum(len(res.get('fail_vote', [])) + len(res.get('fail_screenshot', [])) for res in session_results.values())
@@ -2895,7 +3074,7 @@ class App(tk.Tk):
         # ==========================================
         # 🌟 新增這行：當使用者按掉「OK」後，自動關閉主程式
         # ==========================================
-        self.on_closing()
+        #self.on_closing()
 
             
     def start_mode_1(self):
@@ -3016,6 +3195,7 @@ class App(tk.Tk):
                                 write_voteinfolist(voteinfolist)
                     elif not pending_dict: 
                         log_msg("沒有需要截圖的項目。")
+                        
                     
                     logout()
                     
@@ -3088,6 +3268,7 @@ class App(tk.Tk):
                     for stock_id in stock_list:
                         total_items += 1
                         auto_screenshot(target_id, stock_id)
+
                     
                     logout()
                 except Exception as e:
@@ -3162,6 +3343,70 @@ class App(tk.Tk):
         
         # 統一交給 _finish_task 去結算時間、產出報告並跳出完成視窗
         self.after(0, lambda: self._finish_task(start_time, total_items))
+        
+    def start_egift_scan(self):
+        self.save_config()
+        # 共用撤銷頁面的勾選清單
+        target_accounts = [acc for acc in user_accounts if self.check_vars_revoke.get(acc['id'], tk.BooleanVar()).get()]
+        if not target_accounts: return messagebox.showwarning("提示", "請勾選至少一個帳號！")
+        
+        self.log_text.configure(state='normal'); self.log_text.delete(1.0, tk.END); self.log_text.configure(state='disabled')
+        threading.Thread(target=self.run_logic_egift_scan, args=(target_accounts,), daemon=True).start()
+
+    def run_logic_egift_scan(self, target_accounts):
+        global driver, session_results, user_name_map
+        session_results = {}; user_name_map = {} 
+        
+        log_msg(f"=== 開始 E-Gift 獨立掃描，共 {len(target_accounts)} 個帳號 ===")
+        maintenance_flag = False
+        
+        try:
+            if driver is None: driver = get_driver()
+        except: 
+            log_msg("瀏覽器啟動失敗"); return
+
+        for acc in target_accounts: user_name_map[acc['id']] = acc['name']
+
+        try:
+            for acc in target_accounts:
+                target_id = acc['id']
+                current_login_type = acc['login_type']
+
+                if maintenance_flag: break
+                try: driver.current_url
+                except:
+                    log_msg("瀏覽器意外關閉，重啟中...")
+                    try: driver = get_driver()
+                    except: continue
+
+                try:
+                    log_msg(f"--- 準備掃描: {target_id} (使用: {current_login_type}) ---")
+                    try: 
+                        autoLogin(target_id, current_login_type)
+                    except SystemMaintenanceError:
+                        log_msg("系統維護中，停止任務")
+                        maintenance_flag = True; break
+                    except LoginTimeoutError: 
+                        log_msg("登入逾時，將重啟瀏覽器...")
+                        force_quit_driver(driver)
+                        driver = None
+                        continue
+
+                    # === 呼叫我們寫好的掃描函數 ===
+                    scan_egifts_and_save(target_id)
+                    
+                    logout()
+                except Exception as e:
+                    log_msg(f"{target_id} 執行失敗: {e}")
+                    force_quit_driver(driver)
+                    driver = None
+        finally:
+            force_quit_driver(driver)
+            driver = None
+
+        log_msg("=== E-Gift 獨立掃描任務結束 ===")
+        # 掃描完畢跳出簡單提示即可
+        self.after(0, lambda: messagebox.showinfo("掃描完成", "E-Gift 清單掃描完畢！\n請至程式資料夾查看【E-Gift領取清單.txt】"))
 
 if __name__ == "__main__":
     app = App()
